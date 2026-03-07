@@ -70,6 +70,8 @@ func (db *DB) Migrate(ctx context.Context) error {
 
 		-- Idempotent: add report_channel if the table already existed without it.
 		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS report_channel JSONB;
+		-- Idempotent: add assigned_at for ACK timeout tracking.
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)

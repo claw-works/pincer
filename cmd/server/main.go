@@ -79,6 +79,17 @@ func main() {
 		}
 	}()
 
+	// Background: reassign tasks stuck in 'running' > 5min (agent didn't ACK)
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			staleAgentIDs := s.tasks.ReassignStale(ctx, 5*time.Minute)
+			for _, agentID := range staleAgentIDs {
+				s.agents.SetOnline(ctx, agentID)
+				log.Printf("reassign: agent %s freed (task ack timeout)", agentID)
+			}
+		}
+	}()
+
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -180,16 +191,40 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-assign to a capable online agent
+	// Atomically find a capable online agent and mark it busy
 	if len(req.RequiredCapabilities) > 0 {
-		if capable, err := s.agents.FindCapable(r.Context(), req.RequiredCapabilities); err == nil && len(capable) > 0 {
-			picked := capable[0]
-			if s.tasks.Claim(r.Context(), t.ID, picked.ID) {
+		agentID, err := s.agents.FindCapableAtomic(r.Context(), req.RequiredCapabilities)
+		if err == nil && agentID != "" {
+			if s.tasks.Claim(r.Context(), t.ID, agentID) {
 				t, _ = s.tasks.Get(r.Context(), t.ID)
-				s.hub.Send(picked.ID, hub.Message{
-					Type:    hub.MsgTypeTaskAssigned,
-					Payload: t,
+				// Send TaskAssignPayload via protocol.Envelope
+				var rc *protocol.ReportChannel
+				if t.ReportChannel != nil {
+					rc = &protocol.ReportChannel{
+						Type:      "webhook",
+						ChannelID: t.ReportChannel.WebhookURL,
+					}
+					if t.ReportChannel.DiscordThreadID != "" {
+						rc.Type = "discord_thread"
+						rc.ChannelID = t.ReportChannel.DiscordThreadID
+					}
+				}
+				s.hub.Send(agentID, hub.Message{
+					Type: hub.MsgTypeTaskAssigned,
+					Payload: protocol.TaskAssignPayload{
+						TaskID:        t.ID,
+						Title:         t.Title,
+						Description:   t.Description,
+						Requirements:  t.RequiredCapabilities,
+						Priority:      int(t.Priority),
+						Deadline:      (*time.Time)(nil), // set via assigned_at + 5min
+						ReportChannel: rc,
+					},
 				})
+				log.Printf("createTask: assigned %s → agent %s", t.ID, agentID)
+			} else {
+				// Claim failed (race), release agent back to online
+				s.agents.SetOnline(r.Context(), agentID)
 			}
 		}
 	}
@@ -248,6 +283,10 @@ func (s *Server) completeTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, _ := s.tasks.Get(r.Context(), id)
+	// Release agent back to online
+	if t != nil && t.AssignedAgentID != "" {
+		s.agents.SetOnline(r.Context(), t.AssignedAgentID)
+	}
 	s.hub.Broadcast(hub.Message{Type: hub.MsgTypeBroadcast, Payload: map[string]interface{}{"event": "task.done", "task": t}})
 
 	// Fire outgoing webhook if report_channel is configured
@@ -287,6 +326,10 @@ func (s *Server) failTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, _ := s.tasks.Get(r.Context(), id)
+	// Release agent back to online
+	if t != nil && t.AssignedAgentID != "" {
+		s.agents.SetOnline(r.Context(), t.AssignedAgentID)
+	}
 
 	// Fire outgoing webhook if report_channel is configured
 	if t != nil && t.ReportChannel != nil && t.ReportChannel.WebhookURL != "" {
@@ -322,18 +365,26 @@ func (s *Server) reassignPending(w http.ResponseWriter, r *http.Request) {
 		if len(t.RequiredCapabilities) == 0 {
 			continue
 		}
-		capable, err := s.agents.FindCapable(r.Context(), t.RequiredCapabilities)
-		if err != nil || len(capable) == 0 {
+		agentID, err := s.agents.FindCapableAtomic(r.Context(), t.RequiredCapabilities)
+		if err != nil || agentID == "" {
 			continue
 		}
-		picked := capable[0]
-		if s.tasks.Claim(r.Context(), t.ID, picked.ID) {
+		if s.tasks.Claim(r.Context(), t.ID, agentID) {
 			updated, _ := s.tasks.Get(r.Context(), t.ID)
-			s.hub.Send(picked.ID, hub.Message{
-				Type:    hub.MsgTypeTaskAssigned,
-				Payload: updated,
+			s.hub.Send(agentID, hub.Message{
+				Type: hub.MsgTypeTaskAssigned,
+				Payload: protocol.TaskAssignPayload{
+					TaskID:       t.ID,
+					Title:        t.Title,
+					Description:  t.Description,
+					Requirements: t.RequiredCapabilities,
+					Priority:     int(t.Priority),
+				},
 			})
+			_ = updated
 			assigned++
+		} else {
+			s.agents.SetOnline(r.Context(), agentID)
 		}
 	}
 	jsonResp(w, http.StatusOK, map[string]interface{}{"reassigned": assigned})

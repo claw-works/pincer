@@ -12,6 +12,7 @@ type Status string
 const (
 	StatusOnline  Status = "online"
 	StatusOffline Status = "offline"
+	StatusBusy    Status = "busy"
 )
 
 type Agent struct {

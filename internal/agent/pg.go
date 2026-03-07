@@ -102,6 +102,39 @@ func (r *PGRegistry) UpdateCapabilities(ctx context.Context, id string, capabili
 	return err
 }
 
+// SetBusy marks an agent as busy (task assigned, not available for new tasks).
+func (r *PGRegistry) SetBusy(ctx context.Context, id string) {
+	r.db.PG.Exec(ctx, `UPDATE agents SET status='busy' WHERE id=$1`, id)
+}
+
+// SetOnline marks an agent back to online (task completed or failed).
+func (r *PGRegistry) SetOnline(ctx context.Context, id string) {
+	r.db.PG.Exec(ctx, `UPDATE agents SET status='online' WHERE id=$1 AND status='busy'`, id)
+}
+
+// FindCapableAtomic finds an online capable agent and atomically claims it as busy.
+// Returns the agent ID, or "" if none available.
+func (r *PGRegistry) FindCapableAtomic(ctx context.Context, required []string) (string, error) {
+	if len(required) == 0 {
+		return "", nil
+	}
+	var id string
+	err := r.db.PG.QueryRow(ctx,
+		`UPDATE agents SET status='busy'
+		 WHERE id = (
+		   SELECT id FROM agents
+		   WHERE status='online' AND capabilities @> $1
+		   ORDER BY last_heartbeat DESC
+		   LIMIT 1
+		   FOR UPDATE SKIP LOCKED
+		 )
+		 RETURNING id`, required).Scan(&id)
+	if err != nil {
+		return "", nil // no capable online agent
+	}
+	return id, nil
+}
+
 // scanAgent works for both pgx.Row and pgx.Rows
 type scanner interface {
 	Scan(dest ...any) error

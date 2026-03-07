@@ -56,7 +56,7 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 	row := s.db.PG.QueryRow(ctx,
 		`SELECT id,title,description,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
 		 FROM tasks WHERE id=$1`, id)
 	return scanTask(row)
 }
@@ -67,12 +67,12 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 	if statusFilter == "" {
 		rows, err = s.db.PG.Query(ctx,
 			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
 			 FROM tasks ORDER BY priority DESC, created_at ASC`)
 	} else {
 		rows, err = s.db.PG.Query(ctx,
 			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
 			 FROM tasks WHERE status=$1 ORDER BY priority DESC, created_at ASC`, statusFilter)
 	}
 	if err != nil {
@@ -101,13 +101,36 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 
 func (s *PGStore) Claim(ctx context.Context, id, agentID string) bool {
 	tag, err := s.db.PG.Exec(ctx,
-		`UPDATE tasks SET status='running', assigned_agent_id=$2, updated_at=NOW()
+		`UPDATE tasks SET status='running', assigned_agent_id=$2, assigned_at=NOW(), updated_at=NOW()
 		 WHERE id=$1 AND status='pending'`, id, agentID)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false
 	}
 	s.db.LogTaskEvent(ctx, id, "claimed", map[string]string{"agent_id": agentID})
 	return true
+}
+
+// ReassignStale resets tasks stuck in 'running' longer than timeout back to 'pending'.
+// Returns the list of stale task IDs (so the caller can also mark the agents online).
+func (s *PGStore) ReassignStale(ctx context.Context, timeout time.Duration) []string {
+	rows, err := s.db.PG.Query(ctx,
+		`UPDATE tasks SET status='pending', assigned_agent_id=NULL, assigned_at=NULL, updated_at=NOW()
+		 WHERE status='running' AND assigned_at < NOW() - $1::interval
+		 RETURNING id, assigned_agent_id`,
+		fmt.Sprintf("%d seconds", int(timeout.Seconds())),
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var taskID, agentID string
+		_ = rows.Scan(&taskID, &agentID)
+		ids = append(ids, agentID) // return agent IDs so caller can set them online
+		s.db.LogTaskEvent(ctx, taskID, "reassigned", map[string]string{"reason": "ack_timeout"})
+	}
+	return ids
 }
 
 func (s *PGStore) Complete(ctx context.Context, id, result string) bool {
@@ -144,7 +167,7 @@ func scanTask(s scanner) (*Task, error) {
 	err := s.Scan(
 		&t.ID, &t.Title, &t.Description, &t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg, &rcJSON,
-		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		&t.AssignedAt, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
 	)
 	if err != nil {
 		return nil, err

@@ -43,6 +43,7 @@ type Task struct {
 	Result               string          `json:"result,omitempty"`
 	ErrorMsg             string          `json:"error,omitempty"`
 	ReportChannel        *ReportChannel  `json:"report_channel,omitempty"`
+	AssignedAt           *time.Time      `json:"assigned_at,omitempty"`
 	CreatedAt            time.Time       `json:"created_at"`
 	UpdatedAt            time.Time       `json:"updated_at"`
 	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
