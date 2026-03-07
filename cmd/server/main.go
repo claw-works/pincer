@@ -88,6 +88,10 @@ func main() {
 	r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
 	r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
 	r.Patch("/api/v1/tasks/{id}/fail", s.failTask)
+	r.Post("/api/v1/tasks/reassign", s.reassignPending)
+
+	// Message routes
+	r.Post("/api/v1/messages/send", s.sendMessage)
 
 	// WebSocket
 	r.Get("/ws", s.wsHandler)
@@ -248,6 +252,66 @@ func (s *Server) failTask(w http.ResponseWriter, r *http.Request) {
 	}
 	t, _ := s.tasks.Get(r.Context(), id)
 	jsonResp(w, http.StatusOK, t)
+}
+
+func (s *Server) reassignPending(w http.ResponseWriter, r *http.Request) {
+	tasks, err := s.tasks.List(r.Context(), "pending")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	assigned := 0
+	for _, t := range tasks {
+		if len(t.RequiredCapabilities) == 0 {
+			continue
+		}
+		capable, err := s.agents.FindCapable(r.Context(), t.RequiredCapabilities)
+		if err != nil || len(capable) == 0 {
+			continue
+		}
+		picked := capable[0]
+		if s.tasks.Claim(r.Context(), t.ID, picked.ID) {
+			updated, _ := s.tasks.Get(r.Context(), t.ID)
+			s.hub.Send(picked.ID, hub.Message{
+				Type:    hub.MsgTypeTaskAssigned,
+				Payload: updated,
+			})
+			assigned++
+		}
+	}
+	jsonResp(w, http.StatusOK, map[string]interface{}{"reassigned": assigned})
+}
+
+// ─── Message Handler ──────────────────────────────────────────────────────
+
+func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FromAgentID    string                 `json:"from_agent_id"`
+		ToAgentID      string                 `json:"to_agent_id"`
+		Type           string                 `json:"type"`
+		ConversationID string                 `json:"conversation_id"`
+		Payload        map[string]interface{} `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ToAgentID == "" {
+		http.Error(w, "to_agent_id required", http.StatusBadRequest)
+		return
+	}
+	msgType := hub.MessageType(req.Type)
+	if msgType == "" {
+		msgType = hub.MsgTypeAgentMessage
+	}
+	s.hub.Send(req.ToAgentID, hub.Message{
+		Type:           msgType,
+		From:           req.FromAgentID,
+		To:             req.ToAgentID,
+		ConversationID: req.ConversationID,
+		Payload:        req.Payload,
+	})
+	jsonResp(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 
 // ─── WebSocket ─────────────────────────────────────────────────────────────
