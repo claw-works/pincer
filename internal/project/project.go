@@ -64,6 +64,17 @@ func (s *PGStore) GetUser(ctx context.Context, id string) (*User, error) {
 	return u, nil
 }
 
+func (s *PGStore) GetUserByAPIKey(ctx context.Context, apiKey string) (*User, error) {
+	u := &User{}
+	err := s.db.PG.QueryRow(ctx,
+		`SELECT id, name, api_key, created_at FROM users WHERE api_key=$1`, apiKey,
+	).Scan(&u.ID, &u.Name, &u.APIKey, &u.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("get user by api key: %w", err)
+	}
+	return u, nil
+}
+
 func (s *PGStore) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id, name, api_key, created_at FROM users ORDER BY created_at DESC`)
