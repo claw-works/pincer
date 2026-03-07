@@ -94,7 +94,7 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 		Err() error
 	}
 	r := rows.(rower)
-	var tasks []*Task
+	tasks := make([]*Task, 0)
 	for r.Next() {
 		t, err := scanTask(r)
 		if err != nil {
@@ -126,7 +126,7 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 		Err() error
 	}
 	r := rows.(rower)
-	var tasks []*Task
+	tasks := make([]*Task, 0)
 	for r.Next() {
 		t, err := scanTask(r)
 		if err != nil {
