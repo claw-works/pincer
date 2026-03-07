@@ -39,7 +39,7 @@ func main() {
 	ctx := context.Background()
 
 	pgDSN := getenv("PG_DSN", "postgres://clawhub:clawhub2026@10.0.1.24:5432/clawhub")
-	mongoURI := getenv("MONGO_URI", "mongodb://clawhub:clawhub2026@10.0.1.24:27017")
+	mongoURI := getenv("MONGO_URI", "mongodb://clawhub:clawhub2026@10.0.1.24:27017/clawhub?authSource=admin")
 
 	db, err := store.Connect(ctx, pgDSN, mongoURI, "clawhub")
 	if err != nil {
