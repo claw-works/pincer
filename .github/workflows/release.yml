@@ -86,6 +86,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /orgs/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }} \
+            -f visibility=public || true
+
   release:
     name: Create GitHub Release
     needs: [build-binary, build-docker]
