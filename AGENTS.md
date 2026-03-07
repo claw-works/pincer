@@ -117,8 +117,14 @@ curl -X POST http://10.0.1.24:8080/api/v1/messages/send \
 # 所有任务
 curl http://10.0.1.24:8080/api/v1/tasks
 
-# 按状态过滤：pending | assigned | done | failed
+# 按状态过滤：pending | running | done | failed
 curl http://10.0.1.24:8080/api/v1/tasks?status=pending
+
+# 活跃任务（pending + running，排除 done/failed）—— 最常用
+curl http://10.0.1.24:8080/api/v1/tasks?status=active
+
+# 最近更新的 N 条（按 updated_at 倒序，默认10条）
+curl http://10.0.1.24:8080/api/v1/tasks/recent?limit=5
 ```
 
 ### 认领任务
