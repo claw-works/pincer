@@ -601,15 +601,19 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 // ─── Project Handlers ───────────────────────────────────────────────────────
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		UserID string `json:"user_id"`
-		Name   string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		http.Error(w, "user_id and name required", http.StatusBadRequest)
+	user := auth.FromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-	p, err := s.projects.CreateProject(r.Context(), req.UserID, req.Name)
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, `{"error":"name required"}`, http.StatusBadRequest)
+		return
+	}
+	p, err := s.projects.CreateProject(r.Context(), user.ID, req.Name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -618,8 +622,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	projects, err := s.projects.ListProjects(r.Context(), userID)
+	user := auth.FromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	projects, err := s.projects.ListProjects(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
