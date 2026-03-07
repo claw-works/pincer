@@ -56,12 +56,20 @@ type OnRegisterFunc func(agentID string, p protocol.RegisterPayload)
 // OnHeartbeatFunc is called on each WS HEARTBEAT to update last_seen.
 type OnHeartbeatFunc func(agentID string)
 
+// OnTaskUpdateFunc is called when an agent sends a TASK_UPDATE message.
+type OnTaskUpdateFunc func(agentID string, p protocol.TaskUpdatePayload)
+
+// OnTaskResultFunc is called when an agent sends a TASK_RESULT message.
+type OnTaskResultFunc func(agentID string, p protocol.TaskResultPayload)
+
 type Hub struct {
-	mu          sync.RWMutex
-	clients     map[string]*Client
-	inbox       inboxBackend
-	onRegister  OnRegisterFunc
-	onHeartbeat OnHeartbeatFunc
+	mu           sync.RWMutex
+	clients      map[string]*Client
+	inbox        inboxBackend
+	onRegister   OnRegisterFunc
+	onHeartbeat  OnHeartbeatFunc
+	onTaskUpdate OnTaskUpdateFunc
+	onTaskResult OnTaskResultFunc
 }
 
 func New() *Hub {
@@ -74,6 +82,8 @@ func New() *Hub {
 func (h *Hub) SetInbox(ib inboxBackend)            { h.inbox = ib }
 func (h *Hub) SetOnRegister(f OnRegisterFunc)      { h.onRegister = f }
 func (h *Hub) SetOnHeartbeat(f OnHeartbeatFunc)    { h.onHeartbeat = f }
+func (h *Hub) SetOnTaskUpdate(f OnTaskUpdateFunc)  { h.onTaskUpdate = f }
+func (h *Hub) SetOnTaskResult(f OnTaskResultFunc)  { h.onTaskResult = f }
 
 // IsOnlineWS reports whether the agent has an active WS connection.
 func (h *Hub) IsOnlineWS(agentID string) bool {
@@ -321,6 +331,28 @@ func (c *Client) ReadPump(h *Hub, onMsg func(agentID string, msg Message)) {
 				// Pop inbox and return via HeartbeatACK
 				inbox := h.inbox.PopOffline(c.AgentID)
 				c.sendHeartbeatACK(inbox)
+				continue
+
+			case protocol.TypeTaskUpdate:
+				var p protocol.TaskUpdatePayload
+				if b, _ := json.Marshal(env.Payload); b != nil {
+					_ = json.Unmarshal(b, &p)
+				}
+				if h.onTaskUpdate != nil {
+					go h.onTaskUpdate(c.AgentID, p)
+				}
+				c.sendACK(env.TraceID)
+				continue
+
+			case protocol.TypeTaskResult:
+				var p protocol.TaskResultPayload
+				if b, _ := json.Marshal(env.Payload); b != nil {
+					_ = json.Unmarshal(b, &p)
+				}
+				if h.onTaskResult != nil {
+					go h.onTaskResult(c.AgentID, p)
+				}
+				c.sendACK(env.TraceID)
 				continue
 			}
 		}

@@ -93,3 +93,29 @@ func (db *DB) LogTaskEvent(ctx context.Context, taskID, event string, payload in
 		log.Printf("store: mongo log error: %v", err)
 	}
 }
+
+// TaskEvent represents an audit log entry for a task lifecycle event.
+type TaskEvent struct {
+	ID        bson.ObjectID `bson:"_id,omitempty" json:"id,omitempty"`
+	TaskID    string        `bson:"task_id" json:"task_id"`
+	Event     string        `bson:"event" json:"event"`
+	Payload   interface{}   `bson:"payload" json:"payload"`
+	CreatedAt time.Time     `bson:"created_at" json:"created_at"`
+}
+
+// GetTaskEvents retrieves all audit log entries for a task from MongoDB.
+func (db *DB) GetTaskEvents(ctx context.Context, taskID string) ([]TaskEvent, error) {
+	coll := db.Mongo.Collection("task_events")
+	opts := mongoOpts.Find().SetSort(bson.M{"created_at": 1})
+	cursor, err := coll.Find(ctx, bson.M{"task_id": taskID}, opts)
+	if err != nil {
+		return nil, fmt.Errorf("get task events: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	var events []TaskEvent
+	if err := cursor.All(ctx, &events); err != nil {
+		return nil, fmt.Errorf("decode task events: %w", err)
+	}
+	return events, nil
+}

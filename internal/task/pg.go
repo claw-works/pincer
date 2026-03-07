@@ -139,7 +139,7 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 
 func (s *PGStore) Claim(ctx context.Context, id, agentID string) bool {
 	tag, err := s.db.PG.Exec(ctx,
-		`UPDATE tasks SET status='running', assigned_agent_id=$2, assigned_at=NOW(), updated_at=NOW()
+		`UPDATE tasks SET status='assigned', assigned_agent_id=$2, assigned_at=NOW(), updated_at=NOW()
 		 WHERE id=$1 AND status='pending'`, id, agentID)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false
@@ -148,12 +148,24 @@ func (s *PGStore) Claim(ctx context.Context, id, agentID string) bool {
 	return true
 }
 
-// ReassignStale resets tasks stuck in 'running' longer than timeout back to 'pending'.
-// Returns the list of stale task IDs (so the caller can also mark the agents online).
+// Start transitions a task from assigned → running (agent sent TASK_UPDATE status=running).
+func (s *PGStore) Start(ctx context.Context, id string) bool {
+	tag, err := s.db.PG.Exec(ctx,
+		`UPDATE tasks SET status='running', updated_at=NOW()
+		 WHERE id=$1 AND status='assigned'`, id)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false
+	}
+	s.db.LogTaskEvent(ctx, id, "started", nil)
+	return true
+}
+
+// ReassignStale resets tasks stuck in 'running' or 'assigned' longer than timeout back to 'pending'.
+// Returns the list of stale agent IDs (so the caller can also mark the agents online).
 func (s *PGStore) ReassignStale(ctx context.Context, timeout time.Duration) []string {
 	rows, err := s.db.PG.Query(ctx,
 		`UPDATE tasks SET status='pending', assigned_agent_id=NULL, assigned_at=NULL, updated_at=NOW()
-		 WHERE status='running' AND assigned_at < NOW() - $1::interval
+		 WHERE status IN ('running', 'assigned') AND assigned_at < NOW() - $1::interval
 		 RETURNING id, assigned_agent_id`,
 		fmt.Sprintf("%d seconds", int(timeout.Seconds())),
 	)
@@ -174,7 +186,7 @@ func (s *PGStore) ReassignStale(ctx context.Context, timeout time.Duration) []st
 func (s *PGStore) Complete(ctx context.Context, id, result string) bool {
 	tag, err := s.db.PG.Exec(ctx,
 		`UPDATE tasks SET status='done', result=$2, updated_at=NOW(), completed_at=NOW()
-		 WHERE id=$1 AND status='running'`, id, result)
+		 WHERE id=$1 AND status IN ('running', 'assigned')`, id, result)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false
 	}
@@ -185,12 +197,22 @@ func (s *PGStore) Complete(ctx context.Context, id, result string) bool {
 func (s *PGStore) Fail(ctx context.Context, id, errMsg string) bool {
 	tag, err := s.db.PG.Exec(ctx,
 		`UPDATE tasks SET status='failed', error=$2, updated_at=NOW(), completed_at=NOW()
-		 WHERE id=$1 AND status='running'`, id, errMsg)
+		 WHERE id=$1 AND status IN ('running', 'assigned')`, id, errMsg)
 	if err != nil || tag.RowsAffected() == 0 {
 		return false
 	}
 	s.db.LogTaskEvent(ctx, id, "failed", map[string]string{"error": errMsg})
 	return true
+}
+
+// LogEvent logs a task lifecycle event to MongoDB.
+func (s *PGStore) LogEvent(ctx context.Context, taskID, event string, payload interface{}) {
+	s.db.LogTaskEvent(ctx, taskID, event, payload)
+}
+
+// GetEvents retrieves the audit log for a task from MongoDB.
+func (s *PGStore) GetEvents(ctx context.Context, taskID string) ([]store.TaskEvent, error) {
+	return s.db.GetTaskEvents(ctx, taskID)
 }
 
 type scanner interface {
