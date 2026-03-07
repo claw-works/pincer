@@ -49,10 +49,13 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	h := hub.New()
+	h.SetInbox(hub.NewMongoInbox(db.Mongo))
+
 	s := &Server{
 		agents: agent.NewPGRegistry(db),
 		tasks:  task.NewPGStore(db),
-		hub:    hub.New(),
+		hub:    h,
 	}
 
 	// Background: mark stale agents offline every 30s
@@ -76,6 +79,7 @@ func main() {
 	r.Post("/api/v1/agents/register", s.registerAgent)
 	r.Post("/api/v1/agents/{id}/heartbeat", s.agentHeartbeat)
 	r.Get("/api/v1/agents", s.listAgents)
+	r.Get("/api/v1/agents/{id}/inbox", s.getInbox)
 
 	// Task routes
 	r.Post("/api/v1/tasks", s.createTask)
@@ -118,7 +122,15 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	jsonResp(w, http.StatusOK, map[string]string{"status": "ok"})
+	// deliver pending inbox messages via HTTP polling
+	msgs := s.hub.PopInboxHTTP(id)
+	jsonResp(w, http.StatusOK, map[string]interface{}{"status": "ok", "inbox": msgs})
+}
+
+func (s *Server) getInbox(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	msgs := s.hub.PopInboxHTTP(id)
+	jsonResp(w, http.StatusOK, msgs)
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
