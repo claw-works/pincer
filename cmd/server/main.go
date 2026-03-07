@@ -174,25 +174,25 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
-	// Public routes (no auth required) — registered before auth middleware
+	// Public routes (no auth) — bootstrap only
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "ok", "service": "claw-hub"})
 	})
 	r.Get("/ws", s.wsHandler)
-	r.Post("/api/v1/agents/register", s.registerAgent)
-	r.Post("/api/v1/agents/{id}/heartbeat", s.agentHeartbeat)
-	r.Get("/api/v1/agents/{id}/inbox", s.getInbox)
-	r.Post("/api/v1/users", s.createUser) // bootstrap: get first API key
+	r.Post("/api/v1/users", s.createUser) // bootstrap: create user and get first API key
 
-	// All remaining routes require X-API-Key
+	// All /api/v1/* routes require X-API-Key
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(s.projects))
 
 		// User routes
 		r.Get("/users", s.listUsers)
 
-		// Agent routes (management)
+		// Agent routes
+		r.Post("/agents/register", s.registerAgent)
 		r.Get("/agents", s.listAgents)
+		r.Post("/agents/{id}/heartbeat", s.agentHeartbeat)
+		r.Get("/agents/{id}/inbox", s.getInbox)
 
 		// Project routes
 		r.Post("/projects", s.createProject)
@@ -214,7 +214,7 @@ func main() {
 		// Message routes
 		r.Post("/messages/send", s.sendMessage)
 
-		// Room routes (public group chat per user)
+		// Room routes
 		r.Get("/rooms", s.listRooms)
 		r.Post("/rooms/{room_id}/messages", s.postRoomMessage)
 		r.Get("/rooms/{room_id}/messages", s.listRoomMessages)
