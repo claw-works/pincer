@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -9,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
+	"github.com/claw-works/claw-hub/pkg/protocol"
 )
 
 type MessageType string
@@ -31,22 +32,11 @@ type Message struct {
 	Timestamp      time.Time   `json:"timestamp"`
 }
 
-// InboxStore is the interface the hub uses to persist offline messages.
-type InboxStore interface {
-	SaveInboxMessage(ctx context.Context, msg interface{}) error
-	PopInbox(ctx context.Context, agentID string) (interface{}, error)
-}
-
 type Client struct {
-	AgentID string
-	conn    *websocket.Conn
-	send    chan []byte
-}
-
-type Hub struct {
-	mu      sync.RWMutex
-	clients map[string]*Client
-	inbox   inboxBackend
+	AgentID       string
+	MessagingMode string // "ws" | "poll"
+	conn          *websocket.Conn
+	send          chan []byte
 }
 
 type inboxBackend interface {
@@ -59,6 +49,21 @@ type nopInbox struct{}
 func (nopInbox) SaveOffline(_ string, _ Message) {}
 func (nopInbox) PopOffline(_ string) []Message    { return nil }
 
+// OnRegisterFunc is called when a REGISTER message arrives over WS.
+// The hub calls this so main.go can update the agent DB record.
+type OnRegisterFunc func(agentID string, p protocol.RegisterPayload)
+
+// OnHeartbeatFunc is called on each WS HEARTBEAT to update last_seen.
+type OnHeartbeatFunc func(agentID string)
+
+type Hub struct {
+	mu          sync.RWMutex
+	clients     map[string]*Client
+	inbox       inboxBackend
+	onRegister  OnRegisterFunc
+	onHeartbeat OnHeartbeatFunc
+}
+
 func New() *Hub {
 	return &Hub{
 		clients: make(map[string]*Client),
@@ -66,26 +71,42 @@ func New() *Hub {
 	}
 }
 
-// SetInbox attaches a persistent inbox backend.
-func (h *Hub) SetInbox(ib inboxBackend) { h.inbox = ib }
+func (h *Hub) SetInbox(ib inboxBackend)            { h.inbox = ib }
+func (h *Hub) SetOnRegister(f OnRegisterFunc)      { h.onRegister = f }
+func (h *Hub) SetOnHeartbeat(f OnHeartbeatFunc)    { h.onHeartbeat = f }
 
-// PopInboxHTTP is for HTTP-polling agents that don't maintain a WS connection.
+// IsOnlineWS reports whether the agent has an active WS connection.
+func (h *Hub) IsOnlineWS(agentID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	_, ok := h.clients[agentID]
+	return ok
+}
+
+// PopInboxHTTP is for HTTP-polling agents.
+// If the agent is connected via WS, we do NOT pop inbox here — messages will
+// be delivered over the WS HEARTBEAT ACK instead (fixes WS/HTTP mix bug).
 func (h *Hub) PopInboxHTTP(agentID string) []Message {
+	if h.IsOnlineWS(agentID) {
+		// Agent is on WS; don't drain inbox via HTTP to avoid message loss.
+		return nil
+	}
 	return h.inbox.PopOffline(agentID)
 }
 
 func (h *Hub) Register(agentID string, conn *websocket.Conn) *Client {
 	c := &Client{
-		AgentID: agentID,
-		conn:    conn,
-		send:    make(chan []byte, 64),
+		AgentID:       agentID,
+		MessagingMode: "poll", // default until REGISTER sets it to "ws"
+		conn:          conn,
+		send:          make(chan []byte, 64),
 	}
 	h.mu.Lock()
 	h.clients[agentID] = c
 	h.mu.Unlock()
 	go c.writePump()
 
-	// deliver pending offline messages
+	// Deliver any pending offline messages immediately on connect.
 	go h.deliverInbox(agentID, c)
 	return c
 }
@@ -115,7 +136,7 @@ const maxDepth = 10
 
 func (h *Hub) Send(to string, msg Message) {
 	if msg.Depth > maxDepth {
-		log.Printf("hub: message depth exceeded (%d), dropping to prevent loop", msg.Depth)
+		log.Printf("hub: message depth exceeded (%d), dropping", msg.Depth)
 		return
 	}
 	if msg.ID == "" {
@@ -171,6 +192,66 @@ func (h *Hub) Broadcast(msg Message) {
 	}
 }
 
+// sendACK sends an ACK envelope back to the client.
+func (c *Client) sendACK(traceID string) {
+	ack := protocol.Envelope{
+		ID:        uuid.New().String(),
+		Type:      protocol.TypeACK,
+		From:      "hub",
+		To:        c.AgentID,
+		Timestamp: time.Now(),
+		Payload: protocol.ACKPayload{
+			TraceID: traceID,
+			Status:  "ok",
+		},
+	}
+	data, err := json.Marshal(ack)
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
+	}
+}
+
+// sendHeartbeatACK responds to a HEARTBEAT with inbox messages.
+func (c *Client) sendHeartbeatACK(inbox []Message) {
+	inboxEnvelopes := make([]protocol.Envelope, 0, len(inbox))
+	for _, m := range inbox {
+		payload, _ := json.Marshal(m.Payload)
+		inboxEnvelopes = append(inboxEnvelopes, protocol.Envelope{
+			ID:        m.ID,
+			Type:      protocol.MessageType(m.Type),
+			From:      m.From,
+			To:        m.To,
+			Timestamp: m.Timestamp,
+			Payload:   json.RawMessage(payload),
+		})
+	}
+
+	ack := protocol.Envelope{
+		ID:        uuid.New().String(),
+		Type:      protocol.TypeACK,
+		From:      "hub",
+		To:        c.AgentID,
+		Timestamp: time.Now(),
+		Payload: protocol.HeartbeatACKPayload{
+			Status:          "ok",
+			NextHeartbeatIn: 30,
+			Inbox:           inboxEnvelopes,
+		},
+	}
+	data, err := json.Marshal(ack)
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
+	}
+}
+
 func (c *Client) writePump() {
 	defer c.conn.Close()
 	ticker := time.NewTicker(30 * time.Second)
@@ -185,7 +266,6 @@ func (c *Client) writePump() {
 				return
 			}
 		case <-ticker.C:
-			// send ping to keep connection alive
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -208,6 +288,44 @@ func (c *Client) ReadPump(h *Hub, onMsg func(agentID string, msg Message)) {
 		if err != nil {
 			break
 		}
+
+		// Try to parse as protocol.Envelope first (REGISTER, HEARTBEAT, etc.)
+		var env protocol.Envelope
+		if jsonErr := json.Unmarshal(data, &env); jsonErr == nil {
+			switch env.Type {
+			case protocol.TypeRegister:
+				var p protocol.RegisterPayload
+				if b, _ := json.Marshal(env.Payload); b != nil {
+					_ = json.Unmarshal(b, &p)
+				}
+				// Update messaging mode on client
+				h.mu.Lock()
+				c.MessagingMode = p.MessagingMode
+				if c.MessagingMode == "" {
+					c.MessagingMode = "ws"
+				}
+				h.mu.Unlock()
+				// Notify main.go to update DB
+				if h.onRegister != nil {
+					go h.onRegister(c.AgentID, p)
+				}
+				c.sendACK(env.TraceID)
+				log.Printf("hub: agent %s registered (mode=%s, caps=%v)", c.AgentID, c.MessagingMode, p.Capabilities)
+				continue
+
+			case protocol.TypeHeartbeat:
+				// Update last_seen in DB
+				if h.onHeartbeat != nil {
+					go h.onHeartbeat(c.AgentID)
+				}
+				// Pop inbox and return via HeartbeatACK
+				inbox := h.inbox.PopOffline(c.AgentID)
+				c.sendHeartbeatACK(inbox)
+				continue
+			}
+		}
+
+		// Fall through: handle as legacy hub.Message for routing
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue

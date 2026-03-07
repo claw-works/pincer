@@ -17,6 +17,7 @@ import (
 	"github.com/claw-works/claw-hub/internal/notify"
 	"github.com/claw-works/claw-hub/internal/store"
 	"github.com/claw-works/claw-hub/internal/task"
+	"github.com/claw-works/claw-hub/pkg/protocol"
 )
 
 var upgrader = websocket.Upgrader{
@@ -58,6 +59,18 @@ func main() {
 		tasks:  task.NewPGStore(db),
 		hub:    h,
 	}
+
+	// Wire up WS REGISTER → update agent capabilities + last_seen in DB
+	h.SetOnRegister(func(agentID string, p protocol.RegisterPayload) {
+		if len(p.Capabilities) > 0 {
+			_ = s.agents.UpdateCapabilities(context.Background(), agentID, p.Capabilities)
+		}
+		s.agents.Heartbeat(context.Background(), agentID)
+	})
+	// Wire up WS HEARTBEAT → update last_seen in DB
+	h.SetOnHeartbeat(func(agentID string) {
+		s.agents.Heartbeat(context.Background(), agentID)
+	})
 
 	// Background: mark stale agents offline every 30s
 	go func() {

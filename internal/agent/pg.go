@@ -95,6 +95,13 @@ func (r *PGRegistry) MarkOfflineStale(ctx context.Context, timeout time.Duration
 	)
 }
 
+// UpdateCapabilities updates the capabilities of an existing agent (called on WS REGISTER).
+func (r *PGRegistry) UpdateCapabilities(ctx context.Context, id string, capabilities []string) error {
+	_, err := r.db.PG.Exec(ctx,
+		`UPDATE agents SET capabilities=$2, last_heartbeat=NOW() WHERE id=$1`, id, capabilities)
+	return err
+}
+
 // scanAgent works for both pgx.Row and pgx.Rows
 type scanner interface {
 	Scan(dest ...any) error
