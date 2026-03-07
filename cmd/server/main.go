@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/claw-works/claw-hub/internal/agent"
+	"github.com/claw-works/claw-hub/internal/auth"
 	"github.com/claw-works/claw-hub/internal/hub"
 	"github.com/claw-works/claw-hub/internal/notify"
 	"github.com/claw-works/claw-hub/internal/project"
@@ -170,43 +171,50 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
-	// Health
+	// Public routes (no auth required)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "ok", "service": "claw-hub"})
 	})
+	r.Get("/ws", s.wsHandler)
 
-	// User routes
-	r.Post("/api/v1/users", s.createUser)
-	r.Get("/api/v1/users", s.listUsers)
-
-	// Project routes
-	r.Post("/api/v1/projects", s.createProject)
-	r.Get("/api/v1/projects", s.listProjects)
-	r.Get("/api/v1/projects/{id}", s.getProject)
-	r.Get("/api/v1/projects/{id}/tasks", s.listProjectTasks)
-
-	// Agent routes
+	// Agent routes — no API key needed (agents identify by agent_id)
 	r.Post("/api/v1/agents/register", s.registerAgent)
 	r.Post("/api/v1/agents/{id}/heartbeat", s.agentHeartbeat)
-	r.Get("/api/v1/agents", s.listAgents)
 	r.Get("/api/v1/agents/{id}/inbox", s.getInbox)
 
-	// Task routes
-	r.Post("/api/v1/tasks", s.createTask)
-	r.Get("/api/v1/tasks", s.listTasks)
-	r.Get("/api/v1/tasks/recent", s.listRecentTasks)
-	r.Get("/api/v1/tasks/{id}", s.getTask)
-	r.Get("/api/v1/tasks/{id}/events", s.getTaskEvents)
-	r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
-	r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
-	r.Patch("/api/v1/tasks/{id}/fail", s.failTask)
-	r.Post("/api/v1/tasks/reassign", s.reassignPending)
+	// User creation is public (bootstrap: create first user to get API key)
+	r.Post("/api/v1/users", s.createUser)
 
-	// Message routes
-	r.Post("/api/v1/messages/send", s.sendMessage)
+	// Protected routes — require X-API-Key
+	r.Group(func(r chi.Router) {
+		r.Use(auth.Middleware(s.projects))
 
-	// WebSocket
-	r.Get("/ws", s.wsHandler)
+		// User routes
+		r.Get("/api/v1/users", s.listUsers)
+
+		// Agent routes (management)
+		r.Get("/api/v1/agents", s.listAgents)
+
+		// Project routes
+		r.Post("/api/v1/projects", s.createProject)
+		r.Get("/api/v1/projects", s.listProjects)
+		r.Get("/api/v1/projects/{id}", s.getProject)
+		r.Get("/api/v1/projects/{id}/tasks", s.listProjectTasks)
+
+		// Task routes
+		r.Post("/api/v1/tasks", s.createTask)
+		r.Get("/api/v1/tasks", s.listTasks)
+		r.Get("/api/v1/tasks/recent", s.listRecentTasks)
+		r.Get("/api/v1/tasks/{id}", s.getTask)
+		r.Get("/api/v1/tasks/{id}/events", s.getTaskEvents)
+		r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
+		r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
+		r.Patch("/api/v1/tasks/{id}/fail", s.failTask)
+		r.Post("/api/v1/tasks/reassign", s.reassignPending)
+
+		// Message routes
+		r.Post("/api/v1/messages/send", s.sendMessage)
+	})
 
 	addr := getenv("ADDR", ":8080")
 	log.Printf("claw-hub listening on %s", addr)
