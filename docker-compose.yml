@@ -1,0 +1,40 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: claw-hub-postgres
+    environment:
+      POSTGRES_USER: clawhub
+      POSTGRES_PASSWORD: clawhub
+      POSTGRES_DB: clawhub
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clawhub"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    container_name: claw-hub-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: clawhub
+      MONGO_INITDB_ROOT_PASSWORD: clawhub
+      MONGO_INITDB_DATABASE: clawhub
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  mongo_data:
