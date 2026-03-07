@@ -63,13 +63,19 @@ func main() {
 	// Wire up WS REGISTER → update agent capabilities + last_seen in DB
 	h.SetOnRegister(func(agentID string, p protocol.RegisterPayload) {
 		if len(p.Capabilities) > 0 {
-			_ = s.agents.UpdateCapabilities(context.Background(), agentID, p.Capabilities)
+			if err := s.agents.UpdateCapabilities(context.Background(), agentID, p.Capabilities); err != nil {
+				log.Printf("[warn] onRegister: UpdateCapabilities failed for agent %s: %v", agentID, err)
+			}
 		}
-		s.agents.Heartbeat(context.Background(), agentID)
+		if !s.agents.Heartbeat(context.Background(), agentID) {
+			log.Printf("[warn] onRegister: Heartbeat update failed for agent %s", agentID)
+		}
 	})
 	// Wire up WS HEARTBEAT → update last_seen in DB
 	h.SetOnHeartbeat(func(agentID string) {
-		s.agents.Heartbeat(context.Background(), agentID)
+		if !s.agents.Heartbeat(context.Background(), agentID) {
+			log.Printf("[warn] onHeartbeat: Heartbeat update failed for agent %s", agentID)
+		}
 	})
 
 	// Background: mark stale agents offline every 30s
