@@ -171,49 +171,45 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
 
-	// Public routes (no auth required)
+	// Public routes (no auth required) — registered before auth middleware
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "ok", "service": "claw-hub"})
 	})
 	r.Get("/ws", s.wsHandler)
-
-	// Agent routes — no API key needed (agents identify by agent_id)
 	r.Post("/api/v1/agents/register", s.registerAgent)
 	r.Post("/api/v1/agents/{id}/heartbeat", s.agentHeartbeat)
 	r.Get("/api/v1/agents/{id}/inbox", s.getInbox)
+	r.Post("/api/v1/users", s.createUser) // bootstrap: get first API key
 
-	// User creation is public (bootstrap: create first user to get API key)
-	r.Post("/api/v1/users", s.createUser)
-
-	// Protected routes — require X-API-Key
-	r.Group(func(r chi.Router) {
+	// All remaining routes require X-API-Key
+	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(s.projects))
 
 		// User routes
-		r.Get("/api/v1/users", s.listUsers)
+		r.Get("/users", s.listUsers)
 
 		// Agent routes (management)
-		r.Get("/api/v1/agents", s.listAgents)
+		r.Get("/agents", s.listAgents)
 
 		// Project routes
-		r.Post("/api/v1/projects", s.createProject)
-		r.Get("/api/v1/projects", s.listProjects)
-		r.Get("/api/v1/projects/{id}", s.getProject)
-		r.Get("/api/v1/projects/{id}/tasks", s.listProjectTasks)
+		r.Post("/projects", s.createProject)
+		r.Get("/projects", s.listProjects)
+		r.Get("/projects/{id}", s.getProject)
+		r.Get("/projects/{id}/tasks", s.listProjectTasks)
 
 		// Task routes
-		r.Post("/api/v1/tasks", s.createTask)
-		r.Get("/api/v1/tasks", s.listTasks)
-		r.Get("/api/v1/tasks/recent", s.listRecentTasks)
-		r.Get("/api/v1/tasks/{id}", s.getTask)
-		r.Get("/api/v1/tasks/{id}/events", s.getTaskEvents)
-		r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
-		r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
-		r.Patch("/api/v1/tasks/{id}/fail", s.failTask)
-		r.Post("/api/v1/tasks/reassign", s.reassignPending)
+		r.Post("/tasks", s.createTask)
+		r.Get("/tasks", s.listTasks)
+		r.Get("/tasks/recent", s.listRecentTasks)
+		r.Get("/tasks/{id}", s.getTask)
+		r.Get("/tasks/{id}/events", s.getTaskEvents)
+		r.Patch("/tasks/{id}/claim", s.claimTask)
+		r.Patch("/tasks/{id}/complete", s.completeTask)
+		r.Patch("/tasks/{id}/fail", s.failTask)
+		r.Post("/tasks/reassign", s.reassignPending)
 
 		// Message routes
-		r.Post("/api/v1/messages/send", s.sendMessage)
+		r.Post("/messages/send", s.sendMessage)
 	})
 
 	addr := getenv("ADDR", ":8080")
