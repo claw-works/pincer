@@ -126,7 +126,8 @@ type scanner interface {
 
 func scanTask(s scanner) (*Task, error) {
 	t := &Task{}
-	var status, assignedAgentID, result, errMsg string
+	var status string
+	var assignedAgentID, result, errMsg *string
 	err := s.Scan(
 		&t.ID, &t.Title, &t.Description, &t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg,
@@ -136,8 +137,14 @@ func scanTask(s scanner) (*Task, error) {
 		return nil, err
 	}
 	t.Status = Status(status)
-	t.AssignedAgentID = assignedAgentID
-	t.Result = result
-	t.ErrorMsg = errMsg
+	if assignedAgentID != nil {
+		t.AssignedAgentID = *assignedAgentID
+	}
+	if result != nil {
+		t.Result = *result
+	}
+	if errMsg != nil {
+		t.ErrorMsg = *errMsg
+	}
 	return t, nil
 }
