@@ -73,7 +73,7 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 	case "active": // not done and not failed
 		rows, err = s.db.PG.Query(ctx,
 			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
 			 FROM tasks WHERE status NOT IN ('done','failed') ORDER BY priority DESC, created_at ASC`)
 	default:
 		rows, err = s.db.PG.Query(ctx,
