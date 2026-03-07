@@ -1,0 +1,125 @@
+package task
+
+import (
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type Status string
+type Priority int
+
+const (
+	StatusPending  Status = "pending"
+	StatusRunning  Status = "running"
+	StatusDone     Status = "done"
+	StatusFailed   Status = "failed"
+
+	PriorityLow    Priority = 0
+	PriorityNormal Priority = 5
+	PriorityHigh   Priority = 10
+)
+
+type Task struct {
+	ID                   string    `json:"id"`
+	Title                string    `json:"title"`
+	Description          string    `json:"description"`
+	RequiredCapabilities []string  `json:"required_capabilities"`
+	Priority             Priority  `json:"priority"`
+	Status               Status    `json:"status"`
+	AssignedAgentID      string    `json:"assigned_agent_id,omitempty"`
+	Result               string    `json:"result,omitempty"`
+	ErrorMsg             string    `json:"error,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+}
+
+type Store struct {
+	mu    sync.RWMutex
+	tasks map[string]*Task
+}
+
+func NewStore() *Store {
+	return &Store{tasks: make(map[string]*Task)}
+}
+
+func (s *Store) Create(title, description string, required []string, priority Priority) *Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := &Task{
+		ID:                   uuid.New().String(),
+		Title:                title,
+		Description:          description,
+		RequiredCapabilities: required,
+		Priority:             priority,
+		Status:               StatusPending,
+		CreatedAt:            time.Now(),
+		UpdatedAt:            time.Now(),
+	}
+	s.tasks[t.ID] = t
+	return t
+}
+
+func (s *Store) Get(id string) (*Task, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.tasks[id]
+	return t, ok
+}
+
+func (s *Store) List(statusFilter string) []*Task {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*Task
+	for _, t := range s.tasks {
+		if statusFilter == "" || string(t.Status) == statusFilter {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+func (s *Store) Claim(id, agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusPending {
+		return false
+	}
+	t.Status = StatusRunning
+	t.AssignedAgentID = agentID
+	t.UpdatedAt = time.Now()
+	return true
+}
+
+func (s *Store) Complete(id, result string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusRunning {
+		return false
+	}
+	now := time.Now()
+	t.Status = StatusDone
+	t.Result = result
+	t.UpdatedAt = now
+	t.CompletedAt = &now
+	return true
+}
+
+func (s *Store) Fail(id, errMsg string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusRunning {
+		return false
+	}
+	now := time.Now()
+	t.Status = StatusFailed
+	t.ErrorMsg = errMsg
+	t.UpdatedAt = now
+	t.CompletedAt = &now
+	return true
+}
