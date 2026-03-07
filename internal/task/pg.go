@@ -19,7 +19,7 @@ func NewPGStore(db *store.DB) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) Create(ctx context.Context, title, description string, required []string, priority Priority, rc *ReportChannel) (*Task, error) {
+func (s *PGStore) Create(ctx context.Context, title, description string, required []string, priority Priority, rc *ReportChannel, projectID string) (*Task, error) {
 	t := &Task{
 		ID:                   uuid.New().String(),
 		Title:                title,
@@ -28,6 +28,7 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 		Priority:             priority,
 		Status:               StatusPending,
 		ReportChannel:        rc,
+		ProjectID:            projectID,
 		CreatedAt:            time.Now(),
 		UpdatedAt:            time.Now(),
 	}
@@ -41,10 +42,15 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 		}
 	}
 
+	var pid *string
+	if projectID != "" {
+		pid = &projectID
+	}
+
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO tasks (id, title, description, required_capabilities, priority, status, report_channel, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		t.ID, t.Title, t.Description, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, t.CreatedAt, t.UpdatedAt,
+		`INSERT INTO tasks (id, title, description, required_capabilities, priority, status, report_channel, project_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		t.ID, t.Title, t.Description, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
@@ -56,31 +62,55 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 	row := s.db.PG.QueryRow(ctx,
 		`SELECT id,title,description,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
 		 FROM tasks WHERE id=$1`, id)
 	return scanTask(row)
 }
 
+// ListFilter holds optional filters for List queries.
+type ListFilter struct {
+	Status     string // "" = all, "active" = not done/failed, or exact status
+	ProjectID  string // filter by project
+	AssignedTo string // filter by agent id
+}
+
 func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error) {
-	var rows interface{ Scan(...any) error }
-	var err error
-	switch statusFilter {
+	return s.ListFiltered(ctx, ListFilter{Status: statusFilter})
+}
+
+func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, error) {
+	base := `SELECT id,title,description,required_capabilities,priority,status,
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
+		 FROM tasks WHERE 1=1`
+	args := []interface{}{}
+	n := 1
+
+	switch f.Status {
+	case "active":
+		base += " AND status NOT IN ('done','failed')"
 	case "":
-		rows, err = s.db.PG.Query(ctx,
-			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
-			 FROM tasks ORDER BY priority DESC, created_at ASC`)
-	case "active": // not done and not failed
-		rows, err = s.db.PG.Query(ctx,
-			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
-			 FROM tasks WHERE status NOT IN ('done','failed') ORDER BY priority DESC, created_at ASC`)
+		// no filter
 	default:
-		rows, err = s.db.PG.Query(ctx,
-			`SELECT id,title,description,required_capabilities,priority,status,
-			        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
-			 FROM tasks WHERE status=$1 ORDER BY priority DESC, created_at ASC`, statusFilter)
+		base += fmt.Sprintf(" AND status=$%d", n)
+		args = append(args, f.Status)
+		n++
 	}
+
+	if f.ProjectID != "" {
+		base += fmt.Sprintf(" AND project_id=$%d", n)
+		args = append(args, f.ProjectID)
+		n++
+	}
+
+	if f.AssignedTo != "" {
+		base += fmt.Sprintf(" AND assigned_agent_id=$%d", n)
+		args = append(args, f.AssignedTo)
+		n++
+	}
+
+	base += " ORDER BY priority DESC, created_at ASC"
+
+	rows, err := s.db.PG.Query(ctx, base, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +141,7 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 	}
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id,title,description,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
 		 FROM tasks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -222,12 +252,12 @@ type scanner interface {
 func scanTask(s scanner) (*Task, error) {
 	t := &Task{}
 	var status string
-	var assignedAgentID, result, errMsg *string
+	var assignedAgentID, result, errMsg, projectID *string
 	var rcJSON []byte
 	err := s.Scan(
 		&t.ID, &t.Title, &t.Description, &t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg, &rcJSON,
-		&t.AssignedAt, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		&t.AssignedAt, &projectID, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -241,6 +271,9 @@ func scanTask(s scanner) (*Task, error) {
 	}
 	if errMsg != nil {
 		t.ErrorMsg = *errMsg
+	}
+	if projectID != nil {
+		t.ProjectID = *projectID
 	}
 	if len(rcJSON) > 0 {
 		var rc ReportChannel

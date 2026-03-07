@@ -16,6 +16,7 @@ import (
 	"github.com/claw-works/claw-hub/internal/agent"
 	"github.com/claw-works/claw-hub/internal/hub"
 	"github.com/claw-works/claw-hub/internal/notify"
+	"github.com/claw-works/claw-hub/internal/project"
 	"github.com/claw-works/claw-hub/internal/store"
 	"github.com/claw-works/claw-hub/internal/task"
 	"github.com/claw-works/claw-hub/pkg/protocol"
@@ -26,9 +27,10 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	agents *agent.PGRegistry
-	tasks  *task.PGStore
-	hub    *hub.Hub
+	agents   *agent.PGRegistry
+	tasks    *task.PGStore
+	projects *project.PGStore
+	hub      *hub.Hub
 }
 
 func getenv(key, fallback string) string {
@@ -56,9 +58,10 @@ func main() {
 	h.SetInbox(hub.NewMongoInbox(db.Mongo))
 
 	s := &Server{
-		agents: agent.NewPGRegistry(db),
-		tasks:  task.NewPGStore(db),
-		hub:    h,
+		agents:   agent.NewPGRegistry(db),
+		tasks:    task.NewPGStore(db),
+		projects: project.NewPGStore(db),
+		hub:      h,
 	}
 
 	// Wire up WS REGISTER → update agent capabilities + last_seen in DB
@@ -172,6 +175,16 @@ func main() {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "ok", "service": "claw-hub"})
 	})
 
+	// User routes
+	r.Post("/api/v1/users", s.createUser)
+	r.Get("/api/v1/users", s.listUsers)
+
+	// Project routes
+	r.Post("/api/v1/projects", s.createProject)
+	r.Get("/api/v1/projects", s.listProjects)
+	r.Get("/api/v1/projects/{id}", s.getProject)
+	r.Get("/api/v1/projects/{id}/tasks", s.listProjectTasks)
+
 	// Agent routes
 	r.Post("/api/v1/agents/register", s.registerAgent)
 	r.Post("/api/v1/agents/{id}/heartbeat", s.agentHeartbeat)
@@ -254,12 +267,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		RequiredCapabilities []string            `json:"required_capabilities"`
 		Priority             int                 `json:"priority"`
 		ReportChannel        *task.ReportChannel `json:"report_channel"`
+		ProjectID            string              `json:"project_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel)
+	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -271,7 +285,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		if err == nil && agentID != "" {
 			if s.tasks.Claim(r.Context(), t.ID, agentID) {
 				t, _ = s.tasks.Get(r.Context(), t.ID)
-				// Send TaskAssignPayload via protocol.Envelope
 				var rc *protocol.ReportChannel
 				if t.ReportChannel != nil {
 					rc = &protocol.ReportChannel{
@@ -291,13 +304,11 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 						Description:   t.Description,
 						Requirements:  t.RequiredCapabilities,
 						Priority:      int(t.Priority),
-						Deadline:      (*time.Time)(nil), // set via assigned_at + 5min
 						ReportChannel: rc,
 					},
 				})
 				log.Printf("createTask: assigned %s → agent %s", t.ID, agentID)
 			} else {
-				// Claim failed (race), release agent back to online
 				s.agents.SetOnline(r.Context(), agentID)
 			}
 		}
@@ -307,8 +318,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	tasks, err := s.tasks.List(r.Context(), status)
+	f := task.ListFilter{
+		Status:     r.URL.Query().Get("status"),
+		AssignedTo: r.URL.Query().Get("assigned_to"),
+		ProjectID:  r.URL.Query().Get("project_id"),
+	}
+	tasks, err := s.tasks.ListFiltered(r.Context(), f)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -539,6 +554,93 @@ func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 			s.hub.Broadcast(msg)
 		}
 	})
+}
+
+// ─── User Handlers ─────────────────────────────────────────────────────────
+
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	u, err := s.projects.CreateUser(r.Context(), req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusCreated, u)
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.projects.ListUsers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if users == nil {
+		users = []*project.User{}
+	}
+	jsonResp(w, http.StatusOK, users)
+}
+
+// ─── Project Handlers ───────────────────────────────────────────────────────
+
+func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID string `json:"user_id"`
+		Name   string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "user_id and name required", http.StatusBadRequest)
+		return
+	}
+	p, err := s.projects.CreateProject(r.Context(), req.UserID, req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusCreated, p)
+}
+
+func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	projects, err := s.projects.ListProjects(r.Context(), userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if projects == nil {
+		projects = []*project.Project{}
+	}
+	jsonResp(w, http.StatusOK, projects)
+}
+
+func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	p, err := s.projects.GetProject(r.Context(), id)
+	if err != nil {
+		http.Error(w, "project not found", http.StatusNotFound)
+		return
+	}
+	jsonResp(w, http.StatusOK, p)
+}
+
+func (s *Server) listProjectTasks(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+	f := task.ListFilter{
+		Status:     r.URL.Query().Get("status"),
+		AssignedTo: r.URL.Query().Get("assigned_to"),
+		ProjectID:  projectID,
+	}
+	tasks, err := s.tasks.ListFiltered(r.Context(), f)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusOK, tasks)
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

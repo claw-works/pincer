@@ -43,6 +43,22 @@ func Connect(ctx context.Context, pgDSN, mongoURI, mongoDBName string) (*DB, err
 // Migrate runs idempotent DDL for PostgreSQL.
 func (db *DB) Migrate(ctx context.Context) error {
 	_, err := db.PG.Exec(ctx, `
+		-- ── Multi-tenant: users & projects ───────────────────────────────────────
+		CREATE TABLE IF NOT EXISTS users (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			api_key    TEXT NOT NULL UNIQUE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS projects (
+			id         TEXT PRIMARY KEY,
+			user_id    TEXT NOT NULL REFERENCES users(id),
+			name       TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		-- ── Agents ───────────────────────────────────────────────────────────────
 		CREATE TABLE IF NOT EXISTS agents (
 			id              TEXT PRIMARY KEY,
 			name            TEXT NOT NULL,
@@ -52,6 +68,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 			last_heartbeat  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
+		-- ── Tasks ────────────────────────────────────────────────────────────────
 		CREATE TABLE IF NOT EXISTS tasks (
 			id                    TEXT PRIMARY KEY,
 			title                 TEXT NOT NULL,
@@ -68,10 +85,17 @@ func (db *DB) Migrate(ctx context.Context) error {
 			completed_at          TIMESTAMPTZ
 		);
 
-		-- Idempotent: add report_channel if the table already existed without it.
-		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS report_channel JSONB;
-		-- Idempotent: add assigned_at for ACK timeout tracking.
-		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+		-- Idempotent column additions
+		ALTER TABLE tasks   ADD COLUMN IF NOT EXISTS report_channel JSONB;
+		ALTER TABLE tasks   ADD COLUMN IF NOT EXISTS assigned_at    TIMESTAMPTZ;
+		ALTER TABLE tasks   ADD COLUMN IF NOT EXISTS project_id     TEXT REFERENCES projects(id);
+		ALTER TABLE agents  ADD COLUMN IF NOT EXISTS user_id        TEXT REFERENCES users(id);
+
+		-- Indexes for common queries
+		CREATE INDEX IF NOT EXISTS idx_tasks_project_id   ON tasks(project_id);
+		CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to  ON tasks(assigned_agent_id);
+		CREATE INDEX IF NOT EXISTS idx_agents_user_id     ON agents(user_id);
+		CREATE INDEX IF NOT EXISTS idx_projects_user_id   ON projects(user_id);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)

@@ -41,6 +41,7 @@ type Task struct {
 	Priority             Priority        `json:"priority"`
 	Status               Status          `json:"status"`
 	AssignedAgentID      string          `json:"assigned_agent_id,omitempty"`
+	ProjectID            string          `json:"project_id,omitempty"`
 	Result               string          `json:"result,omitempty"`
 	ErrorMsg             string          `json:"error,omitempty"`
 	ReportChannel        *ReportChannel  `json:"report_channel,omitempty"`
