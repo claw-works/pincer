@@ -72,6 +72,77 @@ func main() {
 	h.SetOnHeartbeat(func(agentID string) {
 		s.agents.Heartbeat(context.Background(), agentID)
 	})
+	// Wire up WS TASK_UPDATE → transition task state
+	h.SetOnTaskUpdate(func(agentID string, p protocol.TaskUpdatePayload) {
+		ctx := context.Background()
+		s.tasks.LogEvent(ctx, p.TaskID, "task_update", p)
+		switch p.Status {
+		case "running":
+			s.tasks.Start(ctx, p.TaskID)
+		case "done":
+			if s.tasks.Complete(ctx, p.TaskID, p.Message) {
+				s.agents.SetOnline(ctx, agentID)
+				s.hub.Broadcast(hub.Message{Type: hub.MsgTypeBroadcast, Payload: map[string]interface{}{"event": "task.done", "task_id": p.TaskID}})
+			}
+		case "failed":
+			if s.tasks.Fail(ctx, p.TaskID, p.Message) {
+				s.agents.SetOnline(ctx, agentID)
+			}
+		}
+	})
+	// Wire up WS TASK_RESULT → store final result/error
+	h.SetOnTaskResult(func(agentID string, p protocol.TaskResultPayload) {
+		ctx := context.Background()
+		switch p.Status {
+		case "done":
+			if s.tasks.Complete(ctx, p.TaskID, p.Result) {
+				s.agents.SetOnline(ctx, agentID)
+				t, _ := s.tasks.Get(ctx, p.TaskID)
+				s.hub.Broadcast(hub.Message{Type: hub.MsgTypeBroadcast, Payload: map[string]interface{}{"event": "task.done", "task": t}})
+				if t != nil && t.ReportChannel != nil && t.ReportChannel.WebhookURL != "" {
+					go func() {
+						evt := notify.TaskEvent{
+							Event:           "task.done",
+							TaskID:          t.ID,
+							TaskTitle:       t.Title,
+							Status:          string(t.Status),
+							Result:          t.Result,
+							AssignedAgentID: t.AssignedAgentID,
+							CompletedAt:     *t.CompletedAt,
+							DiscordThreadID: t.ReportChannel.DiscordThreadID,
+							FeishuChatID:    t.ReportChannel.FeishuChatID,
+						}
+						if err := notify.Send(ctx, t.ReportChannel.WebhookURL, evt); err != nil {
+							log.Printf("taskResult: webhook error: %v", err)
+						}
+					}()
+				}
+			}
+		case "failed":
+			if s.tasks.Fail(ctx, p.TaskID, p.Error) {
+				s.agents.SetOnline(ctx, agentID)
+				t, _ := s.tasks.Get(ctx, p.TaskID)
+				if t != nil && t.ReportChannel != nil && t.ReportChannel.WebhookURL != "" {
+					go func() {
+						evt := notify.TaskEvent{
+							Event:           "task.failed",
+							TaskID:          t.ID,
+							TaskTitle:       t.Title,
+							Status:          string(t.Status),
+							Error:           t.ErrorMsg,
+							AssignedAgentID: t.AssignedAgentID,
+							CompletedAt:     *t.CompletedAt,
+							DiscordThreadID: t.ReportChannel.DiscordThreadID,
+							FeishuChatID:    t.ReportChannel.FeishuChatID,
+						}
+						if err := notify.Send(ctx, t.ReportChannel.WebhookURL, evt); err != nil {
+							log.Printf("taskResult: webhook error: %v", err)
+						}
+					}()
+				}
+			}
+		}
+	})
 
 	// Background: mark stale agents offline every 30s
 	go func() {
@@ -112,6 +183,7 @@ func main() {
 	r.Get("/api/v1/tasks", s.listTasks)
 	r.Get("/api/v1/tasks/recent", s.listRecentTasks)
 	r.Get("/api/v1/tasks/{id}", s.getTask)
+	r.Get("/api/v1/tasks/{id}/events", s.getTaskEvents)
 	r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
 	r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
 	r.Patch("/api/v1/tasks/{id}/fail", s.failTask)
@@ -403,6 +475,16 @@ func (s *Server) reassignPending(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonResp(w, http.StatusOK, map[string]interface{}{"reassigned": assigned})
+}
+
+func (s *Server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	events, err := s.tasks.GetEvents(r.Context(), id)
+	if err != nil {
+		http.Error(w, "failed to fetch events", http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusOK, events)
 }
 
 // ─── Message Handler ──────────────────────────────────────────────────────

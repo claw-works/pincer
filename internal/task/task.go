@@ -12,6 +12,7 @@ type Priority int
 
 const (
 	StatusPending  Status = "pending"
+	StatusAssigned Status = "assigned" // task claimed by agent, not yet started
 	StatusRunning  Status = "running"
 	StatusDone     Status = "done"
 	StatusFailed   Status = "failed"
@@ -101,8 +102,10 @@ func (s *Store) Claim(id, agentID string) bool {
 	if !ok || t.Status != StatusPending {
 		return false
 	}
-	t.Status = StatusRunning
+	now := time.Now()
+	t.Status = StatusAssigned
 	t.AssignedAgentID = agentID
+	t.AssignedAt = &now
 	t.UpdatedAt = time.Now()
 	return true
 }
@@ -111,7 +114,7 @@ func (s *Store) Complete(id, result string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[id]
-	if !ok || t.Status != StatusRunning {
+	if !ok || (t.Status != StatusRunning && t.Status != StatusAssigned) {
 		return false
 	}
 	now := time.Now()
@@ -126,7 +129,7 @@ func (s *Store) Fail(id, errMsg string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tasks[id]
-	if !ok || t.Status != StatusRunning {
+	if !ok || (t.Status != StatusRunning && t.Status != StatusAssigned) {
 		return false
 	}
 	now := time.Now()
