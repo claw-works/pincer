@@ -64,17 +64,55 @@ func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error) {
 	var rows interface{ Scan(...any) error }
 	var err error
-	if statusFilter == "" {
+	switch statusFilter {
+	case "":
 		rows, err = s.db.PG.Query(ctx,
 			`SELECT id,title,description,required_capabilities,priority,status,
 			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
 			 FROM tasks ORDER BY priority DESC, created_at ASC`)
-	} else {
+	case "active": // not done and not failed
+		rows, err = s.db.PG.Query(ctx,
+			`SELECT id,title,description,required_capabilities,priority,status,
+			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+			 FROM tasks WHERE status NOT IN ('done','failed') ORDER BY priority DESC, created_at ASC`)
+	default:
 		rows, err = s.db.PG.Query(ctx,
 			`SELECT id,title,description,required_capabilities,priority,status,
 			        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
 			 FROM tasks WHERE status=$1 ORDER BY priority DESC, created_at ASC`, statusFilter)
 	}
+	if err != nil {
+		return nil, err
+	}
+	type closer interface{ Close() }
+	if c, ok := rows.(closer); ok {
+		defer c.Close()
+	}
+	type rower interface {
+		Next() bool
+		Scan(...any) error
+		Err() error
+	}
+	r := rows.(rower)
+	var tasks []*Task
+	for r.Next() {
+		t, err := scanTask(r)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, r.Err()
+}
+
+func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+	rows, err := s.db.PG.Query(ctx,
+		`SELECT id,title,description,required_capabilities,priority,status,
+		        assigned_agent_id,result,error,report_channel,created_at,updated_at,completed_at
+		 FROM tasks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

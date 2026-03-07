@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -98,6 +99,7 @@ func main() {
 	// Task routes
 	r.Post("/api/v1/tasks", s.createTask)
 	r.Get("/api/v1/tasks", s.listTasks)
+	r.Get("/api/v1/tasks/recent", s.listRecentTasks)
 	r.Get("/api/v1/tasks/{id}", s.getTask)
 	r.Patch("/api/v1/tasks/{id}/claim", s.claimTask)
 	r.Patch("/api/v1/tasks/{id}/complete", s.completeTask)
@@ -200,6 +202,19 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	tasks, err := s.tasks.List(r.Context(), status)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusOK, tasks)
+}
+
+func (s *Server) listRecentTasks(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if n := r.URL.Query().Get("limit"); n != "" {
+		fmt.Sscanf(n, "%d", &limit)
+	}
+	tasks, err := s.tasks.ListRecent(r.Context(), limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
