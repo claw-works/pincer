@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
 
+	"github.com/claw-works/claw-hub/docs"
 	"github.com/claw-works/claw-hub/internal/agent"
 	"github.com/claw-works/claw-hub/internal/auth"
 	"github.com/claw-works/claw-hub/internal/hub"
@@ -178,6 +179,17 @@ func main() {
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, map[string]string{"status": "ok", "service": "claw-hub"})
 	})
+
+	// Agent onboarding docs (no auth — meant to be shared with agents)
+	r.Get("/agents.md", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Write(docs.AgentsMD)
+	})
+	r.Get("/agents.zh.md", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Write(docs.AgentsZhMD)
+	})
+
 	r.Get("/ws", s.wsHandler)
 	r.Post("/api/v1/users", s.createUser) // bootstrap: create user and get first API key
 
