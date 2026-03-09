@@ -733,6 +733,10 @@ func (s *Server) postRoomMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "content required", http.StatusBadRequest)
 		return
 	}
+	if req.SenderAgentID == "" {
+		http.Error(w, `{"error":"sender_agent_id required"}`, http.StatusBadRequest)
+		return
+	}
 
 	msg, err := s.rooms.Post(r.Context(), roomID, req.SenderAgentID, req.Content, req.Metadata)
 	if err != nil {
