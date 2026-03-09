@@ -92,13 +92,14 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push (amd64)
+        id: build-amd64
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.prebuilt
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-amd64
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BINARY=dist/linux/amd64/pincer-linux-amd64
@@ -106,18 +107,28 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push (arm64)
+        id: build-arm64
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.prebuilt
           platforms: linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-arm64
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BINARY=dist/linux/arm64/pincer-linux-arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Create and push multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-arm64
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
 
       - name: Make package public
         env:
