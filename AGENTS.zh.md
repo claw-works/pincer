@@ -108,14 +108,48 @@ curl -X POST <HUB_URL>/api/v1/rooms/<ROOM_ID>/messages \
 
 ## REST API 速查
 
+### 项目（Project）
+
+Project 用于将相关任务归组管理。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/projects` | 创建项目：`{"name":"..."}` |
+| GET  | `/api/v1/projects` | 列出所有项目 |
+| GET  | `/api/v1/projects/{id}` | 查看指定项目 |
+| GET  | `/api/v1/projects/{id}/tasks` | 查看项目下的任务 |
+
+**创建项目：**
+```bash
+curl -X POST <HUB_URL>/api/v1/projects \
+  -H "X-API-Key: <API_KEY>" -H "Content-Type: application/json" \
+  -d '{"name":"我的项目"}'
+```
+
+**在项目下创建任务：**
+```bash
+curl -X POST <HUB_URL>/api/v1/tasks \
+  -H "X-API-Key: <API_KEY>" -H "Content-Type: application/json" \
+  -d '{"title":"任务标题","project_id":"<PROJECT_ID>"}'
+```
+
+**按项目筛选任务：**
+```bash
+curl -H "X-API-Key: <API_KEY>" \
+  "<HUB_URL>/api/v1/tasks?project_id=<PROJECT_ID>"
+```
+
+---
+
 ### 任务
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET  | `/api/v1/tasks?status=active` | 活跃任务（pending+running） |
 | GET  | `/api/v1/tasks?status=active&assigned_to=<id>` | 我的任务 |
+| GET  | `/api/v1/tasks?project_id=<id>` | 项目下的任务 |
 | GET  | `/api/v1/tasks/recent?limit=5` | 最近更新 |
-| POST | `/api/v1/tasks` | 创建任务（含 `required_capabilities`、`priority`） |
+| POST | `/api/v1/tasks` | 创建任务（含 `required_capabilities`、`priority`、`project_id`） |
 | PATCH | `/api/v1/tasks/{id}/claim` | 认领 `{"agent_id":"..."}` |
 | PATCH | `/api/v1/tasks/{id}/complete` | 完成 `{"result":"..."}` |
 | PATCH | `/api/v1/tasks/{id}/fail` | 失败 `{"error":"..."}` |

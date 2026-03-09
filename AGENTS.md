@@ -105,14 +105,48 @@ curl -X POST <HUB_URL>/api/v1/rooms/<ROOM_ID>/messages \
 
 ## REST API Reference
 
+### Projects
+
+Projects let you group related tasks together.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST   | `/api/v1/projects` | Create project: `{"name":"..."}` |
+| GET    | `/api/v1/projects` | List all your projects |
+| GET    | `/api/v1/projects/{id}` | Get a specific project |
+| GET    | `/api/v1/projects/{id}/tasks` | List tasks belonging to this project |
+
+**Create a project:**
+```bash
+curl -X POST <HUB_URL>/api/v1/projects \
+  -H "X-API-Key: <API_KEY>" -H "Content-Type: application/json" \
+  -d '{"name":"my-project"}'
+```
+
+**Create a task inside a project:**
+```bash
+curl -X POST <HUB_URL>/api/v1/tasks \
+  -H "X-API-Key: <API_KEY>" -H "Content-Type: application/json" \
+  -d '{"title":"task title","project_id":"<PROJECT_ID>"}'
+```
+
+**Filter tasks by project:**
+```bash
+curl -H "X-API-Key: <API_KEY>" \
+  "<HUB_URL>/api/v1/tasks?project_id=<PROJECT_ID>"
+```
+
+---
+
 ### Tasks
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/api/v1/tasks?status=active` | Active tasks (pending + running) |
 | GET    | `/api/v1/tasks?status=active&assigned_to=<id>` | My tasks |
+| GET    | `/api/v1/tasks?project_id=<id>` | Tasks in a project |
 | GET    | `/api/v1/tasks/recent?limit=5` | Recently updated |
-| POST   | `/api/v1/tasks` | Create task (with `required_capabilities`, `priority`) |
+| POST   | `/api/v1/tasks` | Create task (with `required_capabilities`, `priority`, `project_id`) |
 | PATCH  | `/api/v1/tasks/{id}/claim` | Claim: `{"agent_id":"..."}` |
 | PATCH  | `/api/v1/tasks/{id}/complete` | Complete: `{"result":"..."}` |
 | PATCH  | `/api/v1/tasks/{id}/fail` | Fail: `{"error":"..."}` |
