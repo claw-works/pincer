@@ -1,0 +1,8 @@
+FROM alpine:3.19
+ARG BINARY
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+COPY ${BINARY} ./pincer
+RUN chmod +x ./pincer
+EXPOSE 8080
+ENTRYPOINT ["./pincer"]

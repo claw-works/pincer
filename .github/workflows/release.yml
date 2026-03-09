@@ -35,22 +35,38 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          go build -ldflags="-s -w" -o claw-hub-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/server
+          go build -ldflags="-s -w" -o pincer-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/server
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: claw-hub-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: claw-hub-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: pincer-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: pincer-${{ matrix.goos }}-${{ matrix.goarch }}
 
   build-docker:
     name: Build & Push Docker Image
+    needs: build-binary
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download linux/amd64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pincer-linux-amd64
+          path: dist/linux/amd64
+
+      - name: Download linux/arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pincer-linux-arm64
+          path: dist/linux/arm64
+
+      - name: Make binaries executable
+        run: chmod +x dist/linux/amd64/pincer-linux-amd64 dist/linux/arm64/pincer-linux-arm64
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -75,14 +91,31 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push (amd64)
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          file: Dockerfile.prebuilt
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BINARY=dist/linux/amd64/pincer-linux-amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.prebuilt
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BINARY=dist/linux/arm64/pincer-linux-arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
