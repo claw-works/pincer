@@ -14,10 +14,16 @@ const UserContextKey contextKey = "auth_user"
 // Middleware validates X-API-Key header.
 // If the key is valid, injects the User into the request context.
 // If the key is missing or invalid, returns 401.
+// For WebSocket browser clients that cannot set headers, the key may also be
+// supplied as the ?api_key=<key> query parameter.
 func Middleware(store *project.PGStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiKey := r.Header.Get("X-API-Key")
+			if apiKey == "" {
+				// Fall back to query parameter (used by browser WebSocket clients).
+				apiKey = r.URL.Query().Get("api_key")
+			}
 			if apiKey == "" {
 				http.Error(w, `{"error":"X-API-Key required"}`, http.StatusUnauthorized)
 				return
