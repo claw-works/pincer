@@ -208,6 +208,7 @@ func main() {
 		r.Post("/agents/{id}/heartbeat", s.agentHeartbeat)
 		r.Get("/agents/{id}/inbox", s.getInbox)
 		r.Get("/agents/{id}/messages", s.listAgentMessages)
+		r.Get("/conversations", s.listConversation)
 
 		// Project routes
 		r.Post("/projects", s.createProject)
@@ -297,6 +298,26 @@ func (s *Server) listAgentMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	msgs := s.hub.ListAgentMessages(id, from, limit)
+	if msgs == nil {
+		msgs = []hub.InboxMessage{}
+	}
+	jsonResp(w, http.StatusOK, msgs)
+}
+
+func (s *Server) listConversation(w http.ResponseWriter, r *http.Request) {
+	a := r.URL.Query().Get("a")
+	b := r.URL.Query().Get("b")
+	if a == "" || b == "" {
+		http.Error(w, `{"error":"params a and b required"}`, http.StatusBadRequest)
+		return
+	}
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	msgs := s.hub.ListConversation(a, b, limit)
 	if msgs == nil {
 		msgs = []hub.InboxMessage{}
 	}
