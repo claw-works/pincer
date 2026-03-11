@@ -41,6 +41,7 @@ type Client struct {
 
 type inboxBackend interface {
 	SaveOffline(agentID string, msg Message)
+	SaveDM(agentID string, msg Message)
 	PopOffline(agentID string) []Message
 	ListMessages(agentID string, fromAgentID string, limit int) []InboxMessage
 	ListConversation(agentA, agentB string, limit int) []InboxMessage
@@ -49,6 +50,7 @@ type inboxBackend interface {
 type nopInbox struct{}
 
 func (nopInbox) SaveOffline(_ string, _ Message)                               {}
+func (nopInbox) SaveDM(_ string, _ Message)                                    {}
 func (nopInbox) PopOffline(_ string) []Message                                 { return nil }
 func (nopInbox) ListMessages(_ string, _ string, _ int) []InboxMessage         { return nil }
 func (nopInbox) ListConversation(_ string, _ string, _ int) []InboxMessage     { return nil }
@@ -234,6 +236,11 @@ func (h *Hub) Send(to string, msg Message) {
 	} else {
 		log.Printf("hub: agent %s offline, saving to inbox", to)
 		h.inbox.SaveOffline(to, msg)
+	}
+
+	// Persist all agent DMs for monitor/history visibility
+	if msg.Type == MsgTypeAgentMessage {
+		h.inbox.SaveDM(to, msg)
 	}
 }
 

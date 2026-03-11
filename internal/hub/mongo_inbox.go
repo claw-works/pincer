@@ -12,20 +12,30 @@ import (
 
 const inboxTTL = 24 * time.Hour
 const inboxCollection = "inbox"
+const dmCollection    = "dm_messages"
 
 // MongoInbox implements inboxBackend using MongoDB.
 type MongoInbox struct {
-	coll *mongo.Collection
+	coll   *mongo.Collection
+	dmColl *mongo.Collection
 }
 
 func NewMongoInbox(db *mongo.Database) *MongoInbox {
 	coll := db.Collection(inboxCollection)
-	// TTL index
+	// TTL index on inbox (offline queue)
 	coll.Indexes().CreateOne(context.Background(), mongo.IndexModel{
 		Keys:    bson.M{"expires_at": 1},
 		Options: mongoOpts.Index().SetExpireAfterSeconds(0),
 	})
-	return &MongoInbox{coll: coll}
+
+	dmColl := db.Collection(dmCollection)
+	// TTL index on dm_messages: keep 30 days
+	dmColl.Indexes().CreateOne(context.Background(), mongo.IndexModel{
+		Keys:    bson.M{"created_at": 1},
+		Options: mongoOpts.Index().SetExpireAfterSeconds(2592000),
+	})
+
+	return &MongoInbox{coll: coll, dmColl: dmColl}
 }
 
 type inboxDoc struct {
@@ -61,6 +71,28 @@ func (m *MongoInbox) SaveOffline(agentID string, msg Message) {
 	}
 }
 
+// SaveDM persists a DM to dm_messages for history/monitor visibility.
+// Called for every agent.message delivery regardless of online status.
+func (m *MongoInbox) SaveDM(agentID string, msg Message) {
+	doc := inboxDoc{
+		ID:             msg.ID,
+		ToAgentID:      agentID,
+		FromAgentID:    msg.From,
+		ConversationID: msg.ConversationID,
+		Depth:          msg.Depth,
+		Type:           string(msg.Type),
+		Payload:        msg.Payload,
+		CreatedAt:      time.Now(),
+		ExpiresAt:      time.Now().Add(30 * 24 * time.Hour),
+		Delivered:      true,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := m.dmColl.InsertOne(ctx, doc); err != nil {
+		log.Printf("inbox: save dm failed: %v", err)
+	}
+}
+
 // InboxMessage is a read-only view of a stored inbox message (for monitor/history).
 type InboxMessage struct {
 	ID          string      `json:"id"`
@@ -72,16 +104,13 @@ type InboxMessage struct {
 	Delivered   bool        `json:"delivered"`
 }
 
-// ListMessages returns inbox history for an agent without marking as delivered.
+// ListMessages returns DM history for an agent (from dm_messages, not offline inbox).
 // Optionally filter by from_agent_id. Results are ordered by created_at desc.
 func (m *MongoInbox) ListMessages(agentID string, fromAgentID string, limit int) []InboxMessage {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	filter := bson.M{
-		"to_agent_id": agentID,
-		"expires_at":  bson.M{"$gt": time.Now()},
-	}
+	filter := bson.M{"to_agent_id": agentID}
 	if fromAgentID != "" {
 		filter["from_agent_id"] = fromAgentID
 	}
@@ -92,7 +121,7 @@ func (m *MongoInbox) ListMessages(agentID string, fromAgentID string, limit int)
 		SetSort(bson.M{"created_at": -1}).
 		SetLimit(int64(limit))
 
-	cur, err := m.coll.Find(ctx, filter, opts)
+	cur, err := m.dmColl.Find(ctx, filter, opts)
 	if err != nil {
 		return nil
 	}
@@ -118,7 +147,7 @@ func (m *MongoInbox) ListMessages(agentID string, fromAgentID string, limit int)
 	return msgs
 }
 
-// ListConversation returns all messages between two agents (both directions),
+// ListConversation returns all DMs between two agents (both directions),
 // sorted by created_at ascending — suitable for chat view.
 func (m *MongoInbox) ListConversation(agentA, agentB string, limit int) []InboxMessage {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -128,7 +157,6 @@ func (m *MongoInbox) ListConversation(agentA, agentB string, limit int) []InboxM
 		limit = 100
 	}
 	filter := bson.M{
-		"expires_at": bson.M{"$gt": time.Now()},
 		"$or": bson.A{
 			bson.M{"to_agent_id": agentA, "from_agent_id": agentB},
 			bson.M{"to_agent_id": agentB, "from_agent_id": agentA},
@@ -138,7 +166,7 @@ func (m *MongoInbox) ListConversation(agentA, agentB string, limit int) []InboxM
 		SetSort(bson.M{"created_at": 1}).
 		SetLimit(int64(limit))
 
-	cur, err := m.coll.Find(ctx, filter, opts)
+	cur, err := m.dmColl.Find(ctx, filter, opts)
 	if err != nil {
 		return nil
 	}
