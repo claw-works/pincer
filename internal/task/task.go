@@ -37,6 +37,8 @@ type Task struct {
 	ID                   string          `json:"id"`
 	Title                string          `json:"title"`
 	Description          string          `json:"description"`
+	Guidance             string          `json:"guidance,omitempty"`
+	AcceptanceCriteria   string          `json:"acceptance_criteria,omitempty"`
 	RequiredCapabilities []string        `json:"required_capabilities"`
 	Priority             Priority        `json:"priority"`
 	Status               Status          `json:"status"`

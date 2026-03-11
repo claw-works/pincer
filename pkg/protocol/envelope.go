@@ -98,14 +98,16 @@ type HeartbeatACKPayload struct {
 
 // TaskAssignPayload is sent from hub to agent when a task is assigned.
 type TaskAssignPayload struct {
-	TaskID          string            `json:"task_id"`
-	Title           string            `json:"title"`
-	Description     string            `json:"description,omitempty"`
-	Requirements    []string          `json:"requirements"`
-	Priority        int               `json:"priority,omitempty"`
-	Deadline        *time.Time        `json:"deadline,omitempty"`
-	ReportChannel   *ReportChannel    `json:"report_channel,omitempty"` // where to report results
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	TaskID             string            `json:"task_id"`
+	Title              string            `json:"title"`
+	Description        string            `json:"description,omitempty"`
+	Guidance           string            `json:"guidance,omitempty"`
+	AcceptanceCriteria string            `json:"acceptance_criteria,omitempty"`
+	Requirements       []string          `json:"requirements"`
+	Priority           int               `json:"priority,omitempty"`
+	Deadline           *time.Time        `json:"deadline,omitempty"`
+	ReportChannel      *ReportChannel    `json:"report_channel,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 // ReportChannel specifies where a task result should be reported.

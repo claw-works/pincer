@@ -379,53 +379,63 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Title                string              `json:"title"`
 		Description          string              `json:"description"`
+		Guidance             string              `json:"guidance"`
+		AcceptanceCriteria   string              `json:"acceptance_criteria"`
 		RequiredCapabilities []string            `json:"required_capabilities"`
 		Priority             int                 `json:"priority"`
 		ReportChannel        *task.ReportChannel `json:"report_channel"`
 		ProjectID            string              `json:"project_id"`
+		AssignedTo           string              `json:"assigned_to"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID)
+	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.Guidance, req.AcceptanceCriteria, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Atomically find a capable online agent and mark it busy
-	if len(req.RequiredCapabilities) > 0 {
+	// Use explicit assigned_to if provided, otherwise find capable agent
+	assignAgentID := req.AssignedTo
+	if assignAgentID == "" && len(req.RequiredCapabilities) > 0 {
 		agentID, err := s.agents.FindCapableAtomic(r.Context(), req.RequiredCapabilities)
-		if err == nil && agentID != "" {
-			if s.tasks.Claim(r.Context(), t.ID, agentID) {
-				t, _ = s.tasks.Get(r.Context(), t.ID)
-				var rc *protocol.ReportChannel
-				if t.ReportChannel != nil {
-					rc = &protocol.ReportChannel{
-						Type:      "webhook",
-						ChannelID: t.ReportChannel.WebhookURL,
-					}
-					if t.ReportChannel.DiscordThreadID != "" {
-						rc.Type = "discord_thread"
-						rc.ChannelID = t.ReportChannel.DiscordThreadID
-					}
+		if err == nil {
+			assignAgentID = agentID
+		}
+	}
+
+	if assignAgentID != "" {
+		if s.tasks.Claim(r.Context(), t.ID, assignAgentID) {
+			t, _ = s.tasks.Get(r.Context(), t.ID)
+			var rc *protocol.ReportChannel
+			if t.ReportChannel != nil {
+				rc = &protocol.ReportChannel{
+					Type:      "webhook",
+					ChannelID: t.ReportChannel.WebhookURL,
 				}
-				s.hub.Send(agentID, hub.Message{
-					Type: hub.MsgTypeTaskAssigned,
-					Payload: protocol.TaskAssignPayload{
-						TaskID:        t.ID,
-						Title:         t.Title,
-						Description:   t.Description,
-						Requirements:  t.RequiredCapabilities,
-						Priority:      int(t.Priority),
-						ReportChannel: rc,
-					},
-				})
-				log.Printf("createTask: assigned %s → agent %s", t.ID, agentID)
-			} else {
-				s.agents.SetOnline(r.Context(), agentID)
+				if t.ReportChannel.DiscordThreadID != "" {
+					rc.Type = "discord_thread"
+					rc.ChannelID = t.ReportChannel.DiscordThreadID
+				}
 			}
+			s.hub.Send(assignAgentID, hub.Message{
+				Type: hub.MsgTypeTaskAssigned,
+				Payload: protocol.TaskAssignPayload{
+					TaskID:             t.ID,
+					Title:              t.Title,
+					Description:        t.Description,
+					Guidance:           t.Guidance,
+					AcceptanceCriteria: t.AcceptanceCriteria,
+					Requirements:       t.RequiredCapabilities,
+					Priority:           int(t.Priority),
+					ReportChannel:      rc,
+				},
+			})
+			log.Printf("createTask: assigned %s → agent %s", t.ID, assignAgentID)
+		} else {
+			s.agents.SetOnline(r.Context(), assignAgentID)
 		}
 	}
 
@@ -591,11 +601,13 @@ func (s *Server) reassignPending(w http.ResponseWriter, r *http.Request) {
 			s.hub.Send(agentID, hub.Message{
 				Type: hub.MsgTypeTaskAssigned,
 				Payload: protocol.TaskAssignPayload{
-					TaskID:       t.ID,
-					Title:        t.Title,
-					Description:  t.Description,
-					Requirements: t.RequiredCapabilities,
-					Priority:     int(t.Priority),
+					TaskID:             t.ID,
+					Title:              t.Title,
+					Description:        t.Description,
+					Guidance:           t.Guidance,
+					AcceptanceCriteria: t.AcceptanceCriteria,
+					Requirements:       t.RequiredCapabilities,
+					Priority:           int(t.Priority),
 				},
 			})
 			_ = updated

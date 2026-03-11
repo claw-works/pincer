@@ -19,11 +19,13 @@ func NewPGStore(db *store.DB) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) Create(ctx context.Context, title, description string, required []string, priority Priority, rc *ReportChannel, projectID string) (*Task, error) {
+func (s *PGStore) Create(ctx context.Context, title, description, guidance, acceptanceCriteria string, required []string, priority Priority, rc *ReportChannel, projectID string) (*Task, error) {
 	t := &Task{
 		ID:                   uuid.New().String(),
 		Title:                title,
 		Description:          description,
+		Guidance:             guidance,
+		AcceptanceCriteria:   acceptanceCriteria,
 		RequiredCapabilities: required,
 		Priority:             priority,
 		Status:               StatusPending,
@@ -48,9 +50,9 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 	}
 
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO tasks (id, title, description, required_capabilities, priority, status, report_channel, project_id, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		t.ID, t.Title, t.Description, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, t.CreatedAt, t.UpdatedAt,
+		`INSERT INTO tasks (id, title, description, guidance, acceptance_criteria, required_capabilities, priority, status, report_channel, project_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		t.ID, t.Title, t.Description, t.Guidance, t.AcceptanceCriteria, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
@@ -61,7 +63,7 @@ func (s *PGStore) Create(ctx context.Context, title, description string, require
 
 func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 	row := s.db.PG.QueryRow(ctx,
-		`SELECT id,title,description,required_capabilities,priority,status,
+		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
 		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
 		 FROM tasks WHERE id=$1`, id)
 	return scanTask(row)
@@ -79,7 +81,7 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 }
 
 func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, error) {
-	base := `SELECT id,title,description,required_capabilities,priority,status,
+	base := `SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
 		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
 		 FROM tasks WHERE 1=1`
 	args := []interface{}{}
@@ -140,7 +142,7 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 		limit = 10
 	}
 	rows, err := s.db.PG.Query(ctx,
-		`SELECT id,title,description,required_capabilities,priority,status,
+		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
 		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
 		 FROM tasks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
@@ -253,9 +255,11 @@ func scanTask(s scanner) (*Task, error) {
 	t := &Task{}
 	var status string
 	var assignedAgentID, result, errMsg, projectID *string
+	var guidance, acceptanceCriteria *string
 	var rcJSON []byte
 	err := s.Scan(
-		&t.ID, &t.Title, &t.Description, &t.RequiredCapabilities,
+		&t.ID, &t.Title, &t.Description, &guidance, &acceptanceCriteria,
+		&t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg, &rcJSON,
 		&t.AssignedAt, &projectID, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
 	)
@@ -274,6 +278,12 @@ func scanTask(s scanner) (*Task, error) {
 	}
 	if projectID != nil {
 		t.ProjectID = *projectID
+	}
+	if guidance != nil {
+		t.Guidance = *guidance
+	}
+	if acceptanceCriteria != nil {
+		t.AcceptanceCriteria = *acceptanceCriteria
 	}
 	if len(rcJSON) > 0 {
 		var rc ReportChannel

@@ -104,14 +104,16 @@ func (db *DB) Migrate(ctx context.Context) error {
 		);
 
 		-- Idempotent column additions
-		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS report_channel JSONB;
-		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS assigned_at    TIMESTAMPTZ;
-		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS project_id     TEXT REFERENCES projects(id);
-		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS user_id        TEXT REFERENCES users(id);
-		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS type           TEXT NOT NULL DEFAULT 'agent';
-		ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo           TEXT NOT NULL DEFAULT '';
-		ALTER TABLE projects ADD COLUMN IF NOT EXISTS description    TEXT NOT NULL DEFAULT '';
-		ALTER TABLE projects ADD COLUMN IF NOT EXISTS overview       TEXT NOT NULL DEFAULT '';
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS report_channel      JSONB;
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS assigned_at         TIMESTAMPTZ;
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS project_id          TEXT REFERENCES projects(id);
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS guidance            TEXT NOT NULL DEFAULT '';
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS acceptance_criteria TEXT NOT NULL DEFAULT '';
+		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS user_id             TEXT REFERENCES users(id);
+		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS type                TEXT NOT NULL DEFAULT 'agent';
+		ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo                TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects ADD COLUMN IF NOT EXISTS description         TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects ADD COLUMN IF NOT EXISTS overview            TEXT NOT NULL DEFAULT '';
 
 		-- Indexes for common queries
 		CREATE INDEX IF NOT EXISTS idx_tasks_project_id   ON tasks(project_id);
