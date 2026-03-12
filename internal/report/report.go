@@ -107,28 +107,162 @@ func ScheduleDaily(ctx context.Context, fire func(ctx context.Context)) {
 	}
 }
 
-// FormatReport generates a markdown summary for a project.
-func FormatReport(projectName, date string, statusCounts map[string]int, totalTasks int, prevSummary string) string {
+// ReportTask is a minimal task representation for report generation.
+type ReportTask struct {
+	Title           string
+	Status          string
+	AssignedAgentID string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ReportProject holds project metadata for report generation.
+type ReportProject struct {
+	Name        string
+	Description string
+	Repo        string
+	Overview    string
+}
+
+// FormatReport generates a rich markdown daily report for a project.
+// agentMap maps agent_id → agent_name.
+func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap map[string]string, cst *time.Location) string {
+	agentName := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if n, ok := agentMap[id]; ok && n != "" {
+			return n
+		}
+		// fallback: first 8 chars of id
+		if len(id) > 8 {
+			return id[:8]
+		}
+		return id
+	}
+
+	isToday := func(t time.Time) bool {
+		return t.In(cst).Format("2006-01-02") == date
+	}
+
+	var (
+		doneToday    []ReportTask
+		newToday     []ReportTask
+		running      []ReportTask
+		assigned     []ReportTask
+		pending      []ReportTask
+		failed       []ReportTask
+		totalDone    int
+	)
+
+	for _, t := range tasks {
+		switch t.Status {
+		case "done":
+			totalDone++
+			if isToday(t.UpdatedAt) {
+				doneToday = append(doneToday, t)
+			}
+		case "running":
+			running = append(running, t)
+		case "assigned":
+			assigned = append(assigned, t)
+		case "pending":
+			pending = append(pending, t)
+		case "failed":
+			failed = append(failed, t)
+		}
+		if t.Status != "done" && isToday(t.CreatedAt) {
+			newToday = append(newToday, t)
+		}
+	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📋 **%s 日报**（%s 北京时间）\n\n", projectName, date))
-	sb.WriteString(fmt.Sprintf("任务概况：共 %d 个\n", totalTasks))
-	if v := statusCounts["done"]; v > 0 {
-		sb.WriteString(fmt.Sprintf("  ✅ 已完成：%d\n", v))
+	sb.WriteString(fmt.Sprintf("📋 **%s 日报**（%s 北京时间）\n", proj.Name, date))
+
+	if proj.Description != "" {
+		sb.WriteString(fmt.Sprintf("\n> %s\n", proj.Description))
 	}
-	if v := statusCounts["running"]; v > 0 {
-		sb.WriteString(fmt.Sprintf("  🔄 进行中：%d\n", v))
+	if proj.Repo != "" {
+		sb.WriteString(fmt.Sprintf("> 仓库：%s\n", proj.Repo))
 	}
-	if v := statusCounts["assigned"]; v > 0 {
-		sb.WriteString(fmt.Sprintf("  📌 已分配：%d\n", v))
+
+	sb.WriteString("\n---\n")
+
+	// 今日动态
+	if len(doneToday) > 0 {
+		sb.WriteString(fmt.Sprintf("\n✅ **今日完成**（%d 个）\n", len(doneToday)))
+		for _, t := range doneToday {
+			line := fmt.Sprintf("  • %s", t.Title)
+			if n := agentName(t.AssignedAgentID); n != "" {
+				line += fmt.Sprintf("（@%s）", n)
+			}
+			sb.WriteString(line + "\n")
+		}
 	}
-	if v := statusCounts["pending"]; v > 0 {
-		sb.WriteString(fmt.Sprintf("  ⏳ 待处理：%d\n", v))
+
+	if len(newToday) > 0 {
+		sb.WriteString(fmt.Sprintf("\n📝 **今日新建**（%d 个）\n", len(newToday)))
+		for _, t := range newToday {
+			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+		}
 	}
-	if v := statusCounts["failed"]; v > 0 {
-		sb.WriteString(fmt.Sprintf("  ❌ 失败：%d\n", v))
+
+	// 进行中
+	if len(running) > 0 {
+		sb.WriteString(fmt.Sprintf("\n🔄 **进行中**（%d 个）\n", len(running)))
+		for _, t := range running {
+			line := fmt.Sprintf("  • %s", t.Title)
+			if n := agentName(t.AssignedAgentID); n != "" {
+				line += fmt.Sprintf("（@%s）", n)
+			}
+			sb.WriteString(line + "\n")
+		}
 	}
-	if prevSummary != "" {
-		sb.WriteString("\n**昨日总结：** " + prevSummary + "\n")
+
+	// 已分配待启动
+	if len(assigned) > 0 {
+		sb.WriteString(fmt.Sprintf("\n📌 **已分配待启动**（%d 个）\n", len(assigned)))
+		for _, t := range assigned {
+			line := fmt.Sprintf("  • %s", t.Title)
+			if n := agentName(t.AssignedAgentID); n != "" {
+				line += fmt.Sprintf("（→ @%s）", n)
+			}
+			sb.WriteString(line + "\n")
+		}
 	}
+
+	// 待处理
+	if len(pending) > 0 {
+		const maxShow = 5
+		sb.WriteString(fmt.Sprintf("\n⏳ **待处理**（%d 个）\n", len(pending)))
+		shown := pending
+		if len(pending) > maxShow {
+			shown = pending[:maxShow]
+		}
+		for _, t := range shown {
+			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+		}
+		if len(pending) > maxShow {
+			sb.WriteString(fmt.Sprintf("  …及其他 %d 个\n", len(pending)-maxShow))
+		}
+	}
+
+	// 失败
+	if len(failed) > 0 {
+		sb.WriteString(fmt.Sprintf("\n❌ **失败**（%d 个）\n", len(failed)))
+		for _, t := range failed {
+			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+		}
+	}
+
+	// 总进度
+	total := len(tasks)
+	sb.WriteString(fmt.Sprintf("\n---\n总进度：%d / %d 完成", totalDone, total))
+	if total > 0 {
+		pct := totalDone * 100 / total
+		sb.WriteString(fmt.Sprintf("（%d%%）", pct))
+	}
+	sb.WriteString("\n")
+
 	return sb.String()
 }

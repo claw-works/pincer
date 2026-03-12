@@ -1124,6 +1124,14 @@ func (s *Server) generateDailyReports(ctx context.Context) {
 		return
 	}
 
+	// Build agent id → name map
+	agentMap := map[string]string{}
+	if agents, err := s.agents.List(ctx); err == nil {
+		for _, a := range agents {
+			agentMap[a.ID] = a.Name
+		}
+	}
+
 	for _, p := range projects {
 		tasks, err := s.tasks.ListFiltered(ctx, task.ListFilter{ProjectID: p.ID})
 		if err != nil {
@@ -1144,18 +1152,26 @@ func (s *Server) generateDailyReports(ctx context.Context) {
 			continue
 		}
 
-		counts := map[string]int{}
-		for _, t := range tasks {
-			counts[string(t.Status)]++
+		// Convert tasks to report format
+		reportTasks := make([]report.ReportTask, len(tasks))
+		for i, t := range tasks {
+			reportTasks[i] = report.ReportTask{
+				Title:           t.Title,
+				Status:          string(t.Status),
+				AssignedAgentID: t.AssignedAgentID,
+				CreatedAt:       t.CreatedAt,
+				UpdatedAt:       t.UpdatedAt,
+			}
 		}
 
-		// Get yesterday's summary
-		prevSummary := ""
-		if prev, err := s.reports.GetLatest(ctx, p.ID); err == nil && prev.Date != date {
-			prevSummary = prev.Summary
+		proj := report.ReportProject{
+			Name:        p.Name,
+			Description: p.Description,
+			Repo:        p.Repo,
+			Overview:    p.Overview,
 		}
 
-		summary := report.FormatReport(p.Name, date, counts, len(tasks), prevSummary)
+		summary := report.FormatReport(proj, date, reportTasks, agentMap, cst)
 
 		// Save to DB
 		if _, err := s.reports.Save(ctx, p.ID, date, summary); err != nil {
