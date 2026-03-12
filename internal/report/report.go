@@ -127,6 +127,15 @@ type ReportProject struct {
 // FormatReport generates a rich markdown daily report for a project.
 // agentMap maps agent_id → agent_name.
 func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap map[string]string, cst *time.Location) string {
+	// Strip "[ProjectName] " prefix from task titles (redundant within a project report)
+	prefix := "[" + proj.Name + "] "
+	stripPrefix := func(title string) string {
+		if strings.HasPrefix(title, prefix) {
+			return title[len(prefix):]
+		}
+		return title
+	}
+
 	agentName := func(id string) string {
 		if id == "" {
 			return ""
@@ -192,7 +201,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(doneToday) > 0 {
 		sb.WriteString(fmt.Sprintf("\n✅ **今日完成**（%d 个）\n", len(doneToday)))
 		for _, t := range doneToday {
-			line := fmt.Sprintf("  • %s", t.Title)
+			line := fmt.Sprintf("  • %s", stripPrefix(t.Title))
 			if n := agentName(t.AssignedAgentID); n != "" {
 				line += fmt.Sprintf("（@%s）", n)
 			}
@@ -203,7 +212,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(newToday) > 0 {
 		sb.WriteString(fmt.Sprintf("\n📝 **今日新建**（%d 个）\n", len(newToday)))
 		for _, t := range newToday {
-			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+			sb.WriteString(fmt.Sprintf("  • %s\n", stripPrefix(t.Title)))
 		}
 	}
 
@@ -211,7 +220,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(running) > 0 {
 		sb.WriteString(fmt.Sprintf("\n🔄 **进行中**（%d 个）\n", len(running)))
 		for _, t := range running {
-			line := fmt.Sprintf("  • %s", t.Title)
+			line := fmt.Sprintf("  • %s", stripPrefix(t.Title))
 			if n := agentName(t.AssignedAgentID); n != "" {
 				line += fmt.Sprintf("（@%s）", n)
 			}
@@ -223,7 +232,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(assigned) > 0 {
 		sb.WriteString(fmt.Sprintf("\n📌 **已分配待启动**（%d 个）\n", len(assigned)))
 		for _, t := range assigned {
-			line := fmt.Sprintf("  • %s", t.Title)
+			line := fmt.Sprintf("  • %s", stripPrefix(t.Title))
 			if n := agentName(t.AssignedAgentID); n != "" {
 				line += fmt.Sprintf("（→ @%s）", n)
 			}
@@ -240,7 +249,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 			shown = pending[:maxShow]
 		}
 		for _, t := range shown {
-			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+			sb.WriteString(fmt.Sprintf("  • %s\n", stripPrefix(t.Title)))
 		}
 		if len(pending) > maxShow {
 			sb.WriteString(fmt.Sprintf("  …及其他 %d 个\n", len(pending)-maxShow))
@@ -251,7 +260,7 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(failed) > 0 {
 		sb.WriteString(fmt.Sprintf("\n❌ **失败**（%d 个）\n", len(failed)))
 		for _, t := range failed {
-			sb.WriteString(fmt.Sprintf("  • %s\n", t.Title))
+			sb.WriteString(fmt.Sprintf("  • %s\n", stripPrefix(t.Title)))
 		}
 	}
 
