@@ -158,9 +158,11 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 		doneToday    []ReportTask
 		newToday     []ReportTask
 		running      []ReportTask
+		review       []ReportTask
 		assigned     []ReportTask
 		pending      []ReportTask
 		failed       []ReportTask
+		rejected     []ReportTask
 		totalDone    int
 	)
 
@@ -173,12 +175,16 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 			}
 		case "running":
 			running = append(running, t)
+		case "review":
+			review = append(review, t)
 		case "assigned":
 			assigned = append(assigned, t)
 		case "pending":
 			pending = append(pending, t)
 		case "failed":
 			failed = append(failed, t)
+		case "rejected":
+			rejected = append(rejected, t)
 		}
 		if t.Status != "done" && isToday(t.CreatedAt) {
 			newToday = append(newToday, t)
@@ -228,6 +234,18 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 		}
 	}
 
+	// 待审核
+	if len(review) > 0 {
+		sb.WriteString(fmt.Sprintf("\n🔍 **待审核**（%d 个）\n", len(review)))
+		for _, t := range review {
+			line := fmt.Sprintf("  • %s", stripPrefix(t.Title))
+			if n := agentName(t.AssignedAgentID); n != "" {
+				line += fmt.Sprintf("（@%s）", n)
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+
 	// 已分配待启动
 	if len(assigned) > 0 {
 		sb.WriteString(fmt.Sprintf("\n📌 **已分配待启动**（%d 个）\n", len(assigned)))
@@ -260,6 +278,14 @@ func FormatReport(proj ReportProject, date string, tasks []ReportTask, agentMap 
 	if len(failed) > 0 {
 		sb.WriteString(fmt.Sprintf("\n❌ **失败**（%d 个）\n", len(failed)))
 		for _, t := range failed {
+			sb.WriteString(fmt.Sprintf("  • %s\n", stripPrefix(t.Title)))
+		}
+	}
+
+	// 被驳回
+	if len(rejected) > 0 {
+		sb.WriteString(fmt.Sprintf("\n🔁 **被驳回待返工**（%d 个）\n", len(rejected)))
+		for _, t := range rejected {
 			sb.WriteString(fmt.Sprintf("  • %s\n", stripPrefix(t.Title)))
 		}
 	}

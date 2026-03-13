@@ -14,6 +14,8 @@ const (
 	StatusPending  Status = "pending"
 	StatusAssigned Status = "assigned" // task claimed by agent, not yet started
 	StatusRunning  Status = "running"
+	StatusReview   Status = "review"   // agent submitted for review
+	StatusRejected Status = "rejected" // reviewer rejected, needs rework
 	StatusDone     Status = "done"
 	StatusFailed   Status = "failed"
 
@@ -47,6 +49,7 @@ type Task struct {
 	Result               string          `json:"result,omitempty"`
 	ErrorMsg             string          `json:"error,omitempty"`
 	ReportChannel        *ReportChannel  `json:"report_channel,omitempty"`
+	ReviewNote           string          `json:"review_note,omitempty"` // rejection reason
 	AssignedAt           *time.Time      `json:"assigned_at,omitempty"`
 	CreatedAt            time.Time       `json:"created_at"`
 	UpdatedAt            time.Time       `json:"updated_at"`
@@ -125,6 +128,48 @@ func (s *Store) Complete(id, result string) bool {
 	t.Result = result
 	t.UpdatedAt = now
 	t.CompletedAt = &now
+	return true
+}
+
+func (s *Store) Submit(id, result string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusRunning {
+		return false
+	}
+	t.Status = StatusReview
+	t.Result = result
+	t.UpdatedAt = time.Now()
+	return true
+}
+
+func (s *Store) Approve(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusReview {
+		return false
+	}
+	now := time.Now()
+	t.Status = StatusDone
+	t.UpdatedAt = now
+	t.CompletedAt = &now
+	return true
+}
+
+func (s *Store) Reject(id, reason string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	if !ok || t.Status != StatusReview {
+		return false
+	}
+	t.Status = StatusPending
+	t.ReviewNote = reason
+	t.AssignedAgentID = ""
+	t.AssignedAt = nil
+	t.UpdatedAt = time.Now()
 	return true
 }
 

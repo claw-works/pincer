@@ -109,6 +109,7 @@ func (db *DB) Migrate(ctx context.Context) error {
 		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS project_id          TEXT REFERENCES projects(id);
 		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS guidance            TEXT NOT NULL DEFAULT '';
 		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS acceptance_criteria TEXT NOT NULL DEFAULT '';
+		ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS review_note         TEXT;
 		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS user_id             TEXT REFERENCES users(id);
 		ALTER TABLE agents   ADD COLUMN IF NOT EXISTS type                TEXT NOT NULL DEFAULT 'agent';
 		ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo                TEXT NOT NULL DEFAULT '';

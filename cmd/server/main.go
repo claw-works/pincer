@@ -256,6 +256,9 @@ func main() {
 		r.Patch("/tasks/{id}/start", s.startTask)
 		r.Patch("/tasks/{id}/complete", s.completeTask)
 		r.Patch("/tasks/{id}/fail", s.failTask)
+		r.Patch("/tasks/{id}/submit", s.submitTask)
+		r.Patch("/tasks/{id}/approve", s.approveTask)
+		r.Patch("/tasks/{id}/reject", s.rejectTask)
 		r.Delete("/tasks/{id}", s.deleteTask)
 		r.Post("/tasks/reassign", s.reassignPending)
 
@@ -606,6 +609,57 @@ func (s *Server) failTask(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	jsonResp(w, http.StatusOK, t)
+}
+
+func (s *Server) submitTask(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.tasks.Submit(r.Context(), id, req.Result) {
+		http.Error(w, "cannot submit task", http.StatusConflict)
+		return
+	}
+	t, _ := s.tasks.Get(r.Context(), id)
+	s.monitor.Broadcast("task.update", map[string]interface{}{"task_id": id, "status": "review", "task": t})
+	jsonResp(w, http.StatusOK, t)
+}
+
+func (s *Server) approveTask(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.tasks.Approve(r.Context(), id) {
+		http.Error(w, "cannot approve task", http.StatusConflict)
+		return
+	}
+	t, _ := s.tasks.Get(r.Context(), id)
+	if t != nil && t.AssignedAgentID != "" {
+		s.agents.SetOnline(r.Context(), t.AssignedAgentID)
+	}
+	s.hub.Broadcast(hub.Message{Type: hub.MsgTypeBroadcast, Payload: map[string]interface{}{"event": "task.done", "task": t}})
+	s.monitor.Broadcast("task.result", map[string]interface{}{"task_id": id, "status": "done", "task": t})
+	jsonResp(w, http.StatusOK, t)
+}
+
+func (s *Server) rejectTask(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.tasks.Reject(r.Context(), id, req.Reason) {
+		http.Error(w, "cannot reject task", http.StatusConflict)
+		return
+	}
+	t, _ := s.tasks.Get(r.Context(), id)
+	s.monitor.Broadcast("task.update", map[string]interface{}{"task_id": id, "status": "rejected", "task": t})
 	jsonResp(w, http.StatusOK, t)
 }
 

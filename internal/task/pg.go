@@ -64,7 +64,7 @@ func (s *PGStore) Create(ctx context.Context, title, description, guidance, acce
 func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 	row := s.db.PG.QueryRow(ctx,
 		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
 		 FROM tasks WHERE id=$1`, id)
 	return scanTask(row)
 }
@@ -84,7 +84,7 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 
 func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, error) {
 	base := `SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
 		 FROM tasks WHERE 1=1`
 	args := []interface{}{}
 	n := 1
@@ -153,7 +153,7 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 	}
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
 		 FROM tasks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -247,6 +247,42 @@ func (s *PGStore) Fail(ctx context.Context, id, errMsg string) bool {
 	return true
 }
 
+// Submit transitions a task from running → review (agent submits result for review).
+func (s *PGStore) Submit(ctx context.Context, id, result string) bool {
+	tag, err := s.db.PG.Exec(ctx,
+		`UPDATE tasks SET status='review', result=$2, updated_at=NOW()
+		 WHERE id=$1 AND status='running'`, id, result)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false
+	}
+	s.db.LogTaskEvent(ctx, id, "submitted", map[string]string{"result": result})
+	return true
+}
+
+// Approve transitions a task from review → done.
+func (s *PGStore) Approve(ctx context.Context, id string) bool {
+	tag, err := s.db.PG.Exec(ctx,
+		`UPDATE tasks SET status='done', updated_at=NOW(), completed_at=NOW()
+		 WHERE id=$1 AND status='review'`, id)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false
+	}
+	s.db.LogTaskEvent(ctx, id, "approved", nil)
+	return true
+}
+
+// Reject transitions a task from review → pending (reset for rework).
+func (s *PGStore) Reject(ctx context.Context, id, reason string) bool {
+	tag, err := s.db.PG.Exec(ctx,
+		`UPDATE tasks SET status='pending', review_note=$2, assigned_agent_id=NULL, assigned_at=NULL, updated_at=NOW()
+		 WHERE id=$1 AND status='review'`, id, reason)
+	if err != nil || tag.RowsAffected() == 0 {
+		return false
+	}
+	s.db.LogTaskEvent(ctx, id, "rejected", map[string]string{"reason": reason})
+	return true
+}
+
 // LogEvent logs a task lifecycle event to MongoDB.
 func (s *PGStore) LogEvent(ctx context.Context, taskID, event string, payload interface{}) {
 	s.db.LogTaskEvent(ctx, taskID, event, payload)
@@ -265,13 +301,13 @@ func scanTask(s scanner) (*Task, error) {
 	t := &Task{}
 	var status string
 	var assignedAgentID, result, errMsg, projectID *string
-	var guidance, acceptanceCriteria *string
+	var guidance, acceptanceCriteria, reviewNote *string
 	var rcJSON []byte
 	err := s.Scan(
 		&t.ID, &t.Title, &t.Description, &guidance, &acceptanceCriteria,
 		&t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg, &rcJSON,
-		&t.AssignedAt, &projectID, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		&t.AssignedAt, &projectID, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &reviewNote,
 	)
 	if err != nil {
 		return nil, err
@@ -294,6 +330,9 @@ func scanTask(s scanner) (*Task, error) {
 	}
 	if acceptanceCriteria != nil {
 		t.AcceptanceCriteria = *acceptanceCriteria
+	}
+	if reviewNote != nil {
+		t.ReviewNote = *reviewNote
 	}
 	if len(rcJSON) > 0 {
 		var rc ReportChannel
