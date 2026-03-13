@@ -138,19 +138,26 @@ func (s *PGStore) UpsertHumanByName(ctx context.Context, currentUserID, name str
 
 	var targetID string
 	if err == nil {
-		// Existing record found: return it as the identity.
-		// Delete the current anonymous record to avoid duplicates.
+		// Existing record found: associate current key with that identity.
+		// Update existing record's api_key to the current session's key,
+		// so future logins with this key return the named user directly.
+		var currentAPIKey string
+		if err := tx.QueryRow(ctx,
+			`SELECT api_key FROM users WHERE id = $1`, currentUserID,
+		).Scan(&currentAPIKey); err != nil {
+			return nil, fmt.Errorf("upsert human: get current key: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE users SET api_key = $1, is_human = true, updated_at = NOW() WHERE id = $2`,
+			currentAPIKey, existingID,
+		); err != nil {
+			return nil, fmt.Errorf("upsert human: update existing: %w", err)
+		}
+		// Delete the anonymous record.
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM users WHERE id = $1`, currentUserID,
 		); err != nil {
 			return nil, fmt.Errorf("upsert human: delete current: %w", err)
-		}
-		// Ensure existing record is marked as human.
-		if _, err := tx.Exec(ctx,
-			`UPDATE users SET is_human = true, updated_at = NOW() WHERE id = $1`,
-			existingID,
-		); err != nil {
-			return nil, fmt.Errorf("upsert human: mark existing as human: %w", err)
 		}
 		targetID = existingID
 	} else {
