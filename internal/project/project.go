@@ -119,24 +119,16 @@ func (s *PGStore) ListUsers(ctx context.Context) ([]*User, error) {
 }
 
 // UpsertHumanByName registers a human identity for the current user.
-// If a user with the given name already exists (and is different from the current user),
-// that record's api_key is updated to the current user's key and is_human is set true;
-// the current (anonymous) user record is then deleted.
-// Otherwise the current user record is updated with the provided name and is_human = true.
+// If a user with the given name already exists (different record), return that record directly
+// as the caller's identity — key is NOT changed (key is auth credential, name is identity).
+// The current anonymous record is deleted to avoid duplicates.
+// If no user with that name exists, update the current record: set name and is_human = true.
 func (s *PGStore) UpsertHumanByName(ctx context.Context, currentUserID, name string) (*User, error) {
 	tx, err := s.db.PG.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("upsert human: begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
-
-	// Get current user's API key.
-	var currentAPIKey string
-	if err := tx.QueryRow(ctx,
-		`SELECT api_key FROM users WHERE id = $1`, currentUserID,
-	).Scan(&currentAPIKey); err != nil {
-		return nil, fmt.Errorf("upsert human: get current user: %w", err)
-	}
 
 	// Check for an existing user with this name (different record).
 	var existingID string
@@ -146,18 +138,19 @@ func (s *PGStore) UpsertHumanByName(ctx context.Context, currentUserID, name str
 
 	var targetID string
 	if err == nil {
-		// Existing record found: migrate current API key to it and mark as human.
-		if _, err := tx.Exec(ctx,
-			`UPDATE users SET api_key = $1, is_human = true, updated_at = NOW() WHERE id = $2`,
-			currentAPIKey, existingID,
-		); err != nil {
-			return nil, fmt.Errorf("upsert human: update existing: %w", err)
-		}
-		// Delete the current (anonymous) record.
+		// Existing record found: return it as the identity.
+		// Delete the current anonymous record to avoid duplicates.
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM users WHERE id = $1`, currentUserID,
 		); err != nil {
 			return nil, fmt.Errorf("upsert human: delete current: %w", err)
+		}
+		// Ensure existing record is marked as human.
+		if _, err := tx.Exec(ctx,
+			`UPDATE users SET is_human = true, updated_at = NOW() WHERE id = $1`,
+			existingID,
+		); err != nil {
+			return nil, fmt.Errorf("upsert human: mark existing as human: %w", err)
 		}
 		targetID = existingID
 	} else {
