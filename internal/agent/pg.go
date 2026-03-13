@@ -165,7 +165,7 @@ func (r *PGRegistry) Delete(ctx context.Context, id string) error {
 // FindOrCreateHumanAgent finds an existing human-type agent linked to a user,
 // or creates a new one. Returns the agent object so callers never expose user.ID.
 func (r *PGRegistry) FindOrCreateHumanAgent(ctx context.Context, userID, name string) (*Agent, error) {
-	// Find existing human agent for this user.
+	// 1. Find by user_id (fast path).
 	var existingID string
 	err := r.db.PG.QueryRow(ctx,
 		`SELECT id FROM agents WHERE user_id=$1 AND type='human' LIMIT 1`, userID,
@@ -176,7 +176,19 @@ func (r *PGRegistry) FindOrCreateHumanAgent(ctx context.Context, userID, name st
 			`UPDATE agents SET name=$1, last_heartbeat=NOW() WHERE id=$2`, name, existingID)
 		return r.Get(ctx, existingID)
 	}
-	// Not found — create a new human agent.
+
+	// 2. Fallback: find by name (handles agents created before user_id column existed).
+	err = r.db.PG.QueryRow(ctx,
+		`SELECT id FROM agents WHERE name=$1 AND type='human' AND user_id IS NULL LIMIT 1`, name,
+	).Scan(&existingID)
+	if err == nil {
+		// Backfill user_id so future lookups use the fast path.
+		_, _ = r.db.PG.Exec(ctx,
+			`UPDATE agents SET user_id=$1, last_heartbeat=NOW() WHERE id=$2`, userID, existingID)
+		return r.Get(ctx, existingID)
+	}
+
+	// 3. Not found — create a new human agent.
 	id := uuid.New().String()
 	now := time.Now()
 	_, err = r.db.PG.Exec(ctx,
