@@ -226,6 +226,9 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(auth.Middleware(s.projects))
 
+		// Auth routes
+		r.Post("/auth/reset-key", s.resetAPIKey)
+
 		// User routes
 		r.Get("/users", s.listUsers)
 
@@ -860,6 +863,20 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		users = []*project.User{}
 	}
 	jsonResp(w, http.StatusOK, users)
+}
+
+func (s *Server) resetAPIKey(w http.ResponseWriter, r *http.Request) {
+	user := auth.FromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	newKey, err := s.projects.ResetAPIKey(r.Context(), user.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusOK, map[string]string{"api_key": newKey})
 }
 
 // ─── Project Handlers ───────────────────────────────────────────────────────

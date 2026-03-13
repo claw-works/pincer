@@ -78,6 +78,18 @@ func (s *PGStore) GetUserByAPIKey(ctx context.Context, apiKey string) (*User, er
 	return u, nil
 }
 
+func (s *PGStore) ResetAPIKey(ctx context.Context, userID string) (string, error) {
+	newKey := uuid.New().String()
+	_, err := s.db.PG.Exec(ctx,
+		`UPDATE users SET api_key = $1 WHERE id = $2`,
+		newKey, userID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("reset api key: %w", err)
+	}
+	return newKey, nil
+}
+
 func (s *PGStore) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id, name, api_key, created_at FROM users ORDER BY created_at DESC`)
