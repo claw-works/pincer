@@ -117,6 +117,9 @@ func (db *DB) Migrate(ctx context.Context) error {
 		ALTER TABLE projects ADD COLUMN IF NOT EXISTS overview            TEXT NOT NULL DEFAULT '';
 		ALTER TABLE users    ADD COLUMN IF NOT EXISTS is_human            BOOLEAN NOT NULL DEFAULT false;
 		ALTER TABLE users    ADD COLUMN IF NOT EXISTS updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW();
+		ALTER TABLE users    ADD COLUMN IF NOT EXISTS room_id             TEXT;
+		-- Assign opaque room UUIDs to existing users that don't have one yet.
+		UPDATE users SET room_id = gen_random_uuid()::text WHERE room_id IS NULL;
 
 		-- Deduplicate users by name: keep the most recently updated record, delete others.
 		-- Safe to run multiple times (idempotent). Only deletes rows with no dependent projects/agents.

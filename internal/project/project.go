@@ -15,6 +15,7 @@ type User struct {
 	Name      string    `json:"name"`
 	APIKey    string    `json:"api_key,omitempty"`
 	IsHuman   bool      `json:"is_human"`
+	RoomID    string    `json:"room_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -46,11 +47,12 @@ func (s *PGStore) CreateUser(ctx context.Context, name string) (*User, error) {
 		ID:        uuid.New().String(),
 		Name:      name,
 		APIKey:    uuid.New().String(), // simple random API key for now
+		RoomID:    uuid.New().String(), // opaque room ID — does not expose user ID
 		CreatedAt: time.Now(),
 	}
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO users (id, name, api_key, created_at) VALUES ($1,$2,$3,$4)`,
-		u.ID, u.Name, u.APIKey, u.CreatedAt,
+		`INSERT INTO users (id, name, api_key, room_id, created_at) VALUES ($1,$2,$3,$4,$5)`,
+		u.ID, u.Name, u.APIKey, u.RoomID, u.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
@@ -61,8 +63,8 @@ func (s *PGStore) CreateUser(ctx context.Context, name string) (*User, error) {
 func (s *PGStore) GetUser(ctx context.Context, id string) (*User, error) {
 	u := &User{}
 	err := s.db.PG.QueryRow(ctx,
-		`SELECT id, name, api_key, is_human, created_at, updated_at FROM users WHERE id=$1`, id,
-	).Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, name, api_key, is_human, COALESCE(room_id, ''), created_at, updated_at FROM users WHERE id=$1`, id,
+	).Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.RoomID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
@@ -72,8 +74,8 @@ func (s *PGStore) GetUser(ctx context.Context, id string) (*User, error) {
 func (s *PGStore) GetUserByAPIKey(ctx context.Context, apiKey string) (*User, error) {
 	u := &User{}
 	err := s.db.PG.QueryRow(ctx,
-		`SELECT id, name, api_key, is_human, created_at, updated_at FROM users WHERE api_key=$1`, apiKey,
-	).Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.CreatedAt, &u.UpdatedAt)
+		`SELECT id, name, api_key, is_human, COALESCE(room_id, ''), created_at, updated_at FROM users WHERE api_key=$1`, apiKey,
+	).Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.RoomID, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get user by api key: %w", err)
 	}
@@ -102,7 +104,7 @@ func (s *PGStore) ResetAPIKey(ctx context.Context, userID string) (string, error
 
 func (s *PGStore) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.PG.Query(ctx,
-		`SELECT id, name, api_key, is_human, created_at, updated_at FROM users ORDER BY created_at DESC`)
+		`SELECT id, name, api_key, is_human, COALESCE(room_id, ''), created_at, updated_at FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +112,7 @@ func (s *PGStore) ListUsers(ctx context.Context) ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.APIKey, &u.IsHuman, &u.RoomID, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

@@ -321,7 +321,14 @@ func (s *Server) registerAgent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		jsonResp(w, http.StatusOK, u)
+		// Find or create a human agent linked to this user and return it.
+		// We return an agent (not a user) so the frontend never stores user.ID.
+		a, err := s.agents.FindOrCreateHumanAgent(r.Context(), u.ID, u.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		jsonResp(w, http.StatusOK, a)
 		return
 	}
 	a, err := s.agents.Register(r.Context(), req.ID, req.Name, req.Capabilities, req.Type)
@@ -815,7 +822,7 @@ func (s *Server) roomChatWsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	roomID := chi.URLParam(r, "room_id")
 	// Enforce room ownership: only the user's own room is permitted.
-	if roomID != room.DefaultRoomID(user.ID) {
+	if roomID != userRoomID(user) {
 		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
 		return
 	}
@@ -914,7 +921,13 @@ func (s *Server) registerHuman(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	jsonResp(w, http.StatusOK, u)
+	// Return agent object (not user) so frontend never stores user.ID.
+	a, err := s.agents.FindOrCreateHumanAgent(r.Context(), u.ID, u.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResp(w, http.StatusOK, a)
 }
 
 // ─── Project Handlers ───────────────────────────────────────────────────────
@@ -1040,9 +1053,9 @@ func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	roomID := room.DefaultRoomID(user.ID)
+	roomID := userRoomID(user)
 	jsonResp(w, http.StatusOK, []map[string]string{
-		{"id": roomID, "user_id": user.ID, "name": "default"},
+		{"id": roomID, "name": "default"},
 	})
 }
 
@@ -1060,7 +1073,7 @@ func (s *Server) postRoomMessage(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "room_id")
 
 	// Validate that the room belongs to the authenticated user
-	expectedRoomID := room.DefaultRoomID(user.ID)
+	expectedRoomID := userRoomID(user)
 	if roomID != expectedRoomID {
 		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
 		return
@@ -1106,7 +1119,7 @@ func (s *Server) listRoomMessages(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "room_id")
 
 	// Validate that the room belongs to the authenticated user
-	expectedRoomID := room.DefaultRoomID(user.ID)
+	expectedRoomID := userRoomID(user)
 	if roomID != expectedRoomID {
 		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
 		return
@@ -1141,7 +1154,7 @@ func (s *Server) searchRoomMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roomID := chi.URLParam(r, "room_id")
-	if roomID != room.DefaultRoomID(user.ID) {
+	if roomID != userRoomID(user) {
 		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
 		return
 	}
@@ -1178,6 +1191,15 @@ func (s *Server) searchDMMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+// userRoomID returns the user's opaque room ID.
+// Falls back to the legacy format for existing users pending migration.
+func userRoomID(u *project.User) string {
+	if u.RoomID != "" {
+		return u.RoomID
+	}
+	return room.DefaultRoomID(u.ID)
+}
 
 func jsonResp(w http.ResponseWriter, code int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

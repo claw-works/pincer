@@ -161,3 +161,31 @@ func (r *PGRegistry) Delete(ctx context.Context, id string) error {
 	_, err := r.db.PG.Exec(ctx, `DELETE FROM agents WHERE id=$1`, id)
 	return err
 }
+
+// FindOrCreateHumanAgent finds an existing human-type agent linked to a user,
+// or creates a new one. Returns the agent object so callers never expose user.ID.
+func (r *PGRegistry) FindOrCreateHumanAgent(ctx context.Context, userID, name string) (*Agent, error) {
+	// Find existing human agent for this user.
+	var existingID string
+	err := r.db.PG.QueryRow(ctx,
+		`SELECT id FROM agents WHERE user_id=$1 AND type='human' LIMIT 1`, userID,
+	).Scan(&existingID)
+	if err == nil {
+		// Found — update name in case it changed.
+		_, _ = r.db.PG.Exec(ctx,
+			`UPDATE agents SET name=$1, last_heartbeat=NOW() WHERE id=$2`, name, existingID)
+		return r.Get(ctx, existingID)
+	}
+	// Not found — create a new human agent.
+	id := uuid.New().String()
+	now := time.Now()
+	_, err = r.db.PG.Exec(ctx,
+		`INSERT INTO agents (id, name, type, capabilities, status, registered_at, last_heartbeat, user_id)
+		 VALUES ($1, $2, 'human', '{}', 'offline', $3, $3, $4)`,
+		id, name, now, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create human agent: %w", err)
+	}
+	return r.Get(ctx, id)
+}
