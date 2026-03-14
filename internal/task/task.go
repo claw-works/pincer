@@ -40,7 +40,6 @@ type Task struct {
 	Title                string          `json:"title"`
 	Description          string          `json:"description"`
 	Guidance             string          `json:"guidance,omitempty"`
-	AcceptanceCriteria   string          `json:"acceptance_criteria,omitempty"`
 	RequiredCapabilities []string        `json:"required_capabilities"`
 	Priority             Priority        `json:"priority"`
 	Status               Status          `json:"status"`
@@ -49,11 +48,16 @@ type Task struct {
 	Result               string          `json:"result,omitempty"`
 	ErrorMsg             string          `json:"error,omitempty"`
 	ReportChannel        *ReportChannel  `json:"report_channel,omitempty"`
-	ReviewNote           string          `json:"review_note,omitempty"` // rejection reason
+	ReviewNote           string          `json:"review_note,omitempty"`
 	AssignedAt           *time.Time      `json:"assigned_at,omitempty"`
 	CreatedAt            time.Time       `json:"created_at"`
 	UpdatedAt            time.Time       `json:"updated_at"`
 	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
+	// BMAD Method fields
+	ParentTaskID       string   `json:"parent_task_id,omitempty"`
+	TaskType           string   `json:"task_type,omitempty"` // epic / story / task
+	UserStory          string   `json:"user_story,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 }
 
 type Store struct {

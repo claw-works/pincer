@@ -19,7 +19,10 @@ func NewPGStore(db *store.DB) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) Create(ctx context.Context, title, description, guidance, acceptanceCriteria string, required []string, priority Priority, rc *ReportChannel, projectID string) (*Task, error) {
+func (s *PGStore) Create(ctx context.Context, title, description, guidance string, acceptanceCriteria []string, required []string, priority Priority, rc *ReportChannel, projectID string, parentTaskID, taskType, userStory string) (*Task, error) {
+	if taskType == "" {
+		taskType = "task"
+	}
 	t := &Task{
 		ID:                   uuid.New().String(),
 		Title:                title,
@@ -31,6 +34,9 @@ func (s *PGStore) Create(ctx context.Context, title, description, guidance, acce
 		Status:               StatusPending,
 		ReportChannel:        rc,
 		ProjectID:            projectID,
+		ParentTaskID:         parentTaskID,
+		TaskType:             taskType,
+		UserStory:            userStory,
 		CreatedAt:            time.Now(),
 		UpdatedAt:            time.Now(),
 	}
@@ -48,11 +54,19 @@ func (s *PGStore) Create(ctx context.Context, title, description, guidance, acce
 	if projectID != "" {
 		pid = &projectID
 	}
+	var parentID *string
+	if parentTaskID != "" {
+		parentID = &parentTaskID
+	}
+	var acJSON []byte
+	if len(acceptanceCriteria) > 0 {
+		acJSON, _ = json.Marshal(acceptanceCriteria)
+	}
 
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO tasks (id, title, description, guidance, acceptance_criteria, required_capabilities, priority, status, report_channel, project_id, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		t.ID, t.Title, t.Description, t.Guidance, t.AcceptanceCriteria, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, t.CreatedAt, t.UpdatedAt,
+		`INSERT INTO tasks (id, title, description, guidance, acceptance_criteria, required_capabilities, priority, status, report_channel, project_id, parent_task_id, task_type, user_story, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		t.ID, t.Title, t.Description, t.Guidance, acJSON, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, parentID, t.TaskType, nullStr(t.UserStory), t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
@@ -64,7 +78,8 @@ func (s *PGStore) Create(ctx context.Context, title, description, guidance, acce
 func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 	row := s.db.PG.QueryRow(ctx,
 		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note,
+		        COALESCE(parent_task_id,''),COALESCE(task_type,'task'),COALESCE(user_story,'')
 		 FROM tasks WHERE id=$1`, id)
 	return scanTask(row)
 }
@@ -74,6 +89,7 @@ type ListFilter struct {
 	Status     string // "" = all, "active" = not done/failed, or exact status
 	ProjectID  string // filter by project
 	AssignedTo string // filter by agent id
+	ParentID   string // filter by parent task (Epic/Story children)
 	Limit      int    // 0 = no limit; max 500
 	Offset     int    // pagination offset
 }
@@ -84,7 +100,8 @@ func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error
 
 func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, error) {
 	base := `SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note,
+		        COALESCE(parent_task_id,''),COALESCE(task_type,'task'),COALESCE(user_story,'')
 		 FROM tasks WHERE 1=1`
 	args := []interface{}{}
 	n := 1
@@ -109,6 +126,12 @@ func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, erro
 	if f.AssignedTo != "" {
 		base += fmt.Sprintf(" AND assigned_agent_id=$%d", n)
 		args = append(args, f.AssignedTo)
+		n++
+	}
+
+	if f.ParentID != "" {
+		base += fmt.Sprintf(" AND parent_task_id=$%d", n)
+		args = append(args, f.ParentID)
 		n++
 	}
 
@@ -153,7 +176,8 @@ func (s *PGStore) ListRecent(ctx context.Context, limit int) ([]*Task, error) {
 	}
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id,title,description,guidance,acceptance_criteria,required_capabilities,priority,status,
-		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note
+		        assigned_agent_id,result,error,report_channel,assigned_at,project_id,created_at,updated_at,completed_at,review_note,
+		        COALESCE(parent_task_id,''),COALESCE(task_type,'task'),COALESCE(user_story,'')
 		 FROM tasks ORDER BY updated_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -301,13 +325,14 @@ func scanTask(s scanner) (*Task, error) {
 	t := &Task{}
 	var status string
 	var assignedAgentID, result, errMsg, projectID *string
-	var guidance, acceptanceCriteria, reviewNote *string
-	var rcJSON []byte
+	var guidance, reviewNote *string
+	var rcJSON, acJSON []byte
 	err := s.Scan(
-		&t.ID, &t.Title, &t.Description, &guidance, &acceptanceCriteria,
+		&t.ID, &t.Title, &t.Description, &guidance, &acJSON,
 		&t.RequiredCapabilities,
 		&t.Priority, &status, &assignedAgentID, &result, &errMsg, &rcJSON,
 		&t.AssignedAt, &projectID, &t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &reviewNote,
+		&t.ParentTaskID, &t.TaskType, &t.UserStory,
 	)
 	if err != nil {
 		return nil, err
@@ -328,8 +353,8 @@ func scanTask(s scanner) (*Task, error) {
 	if guidance != nil {
 		t.Guidance = *guidance
 	}
-	if acceptanceCriteria != nil {
-		t.AcceptanceCriteria = *acceptanceCriteria
+	if len(acJSON) > 0 {
+		_ = json.Unmarshal(acJSON, &t.AcceptanceCriteria)
 	}
 	if reviewNote != nil {
 		t.ReviewNote = *reviewNote
@@ -348,4 +373,11 @@ func scanTask(s scanner) (*Task, error) {
 func (s *PGStore) Delete(ctx context.Context, id string) error {
 	_, err := s.db.PG.Exec(ctx, `DELETE FROM tasks WHERE id=$1`, id)
 	return err
+}
+
+func nullStr(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }

@@ -177,6 +177,13 @@ func (db *DB) Migrate(ctx context.Context) error {
 
 		CREATE INDEX IF NOT EXISTS idx_agent_reports_job_id    ON agent_reports(job_id);
 		CREATE INDEX IF NOT EXISTS idx_agent_reports_created_at ON agent_reports(created_at DESC);
+
+		-- BMAD Method compatibility: task hierarchy + structured fields
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_task_id TEXT REFERENCES tasks(id);
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_type      TEXT NOT NULL DEFAULT 'task';
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS user_story     TEXT;
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS acceptance_criteria JSONB;
+		CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_task_id);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)

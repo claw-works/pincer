@@ -102,7 +102,7 @@ type TaskAssignPayload struct {
 	Title              string            `json:"title"`
 	Description        string            `json:"description,omitempty"`
 	Guidance           string            `json:"guidance,omitempty"`
-	AcceptanceCriteria string            `json:"acceptance_criteria,omitempty"`
+	AcceptanceCriteria []string          `json:"acceptance_criteria,omitempty"`
 	Requirements       []string          `json:"requirements"`
 	Priority           int               `json:"priority,omitempty"`
 	Deadline           *time.Time        `json:"deadline,omitempty"`

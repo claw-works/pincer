@@ -436,18 +436,27 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Title                string              `json:"title"`
 		Description          string              `json:"description"`
 		Guidance             string              `json:"guidance"`
-		AcceptanceCriteria   string              `json:"acceptance_criteria"`
+		AcceptanceCriteria   []string            `json:"acceptance_criteria"`
 		RequiredCapabilities []string            `json:"required_capabilities"`
 		Priority             int                 `json:"priority"`
 		ReportChannel        *task.ReportChannel `json:"report_channel"`
 		ProjectID            string              `json:"project_id"`
 		AssignedTo           string              `json:"assigned_to"`
+		AssignedAgentID      string              `json:"assigned_agent_id"`
+		// BMAD fields
+		ParentTaskID string `json:"parent_task_id"`
+		TaskType     string `json:"task_type"`
+		UserStory    string `json:"user_story"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.Guidance, req.AcceptanceCriteria, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID)
+	// support both assigned_to and assigned_agent_id
+	if req.AssignedTo == "" {
+		req.AssignedTo = req.AssignedAgentID
+	}
+	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.Guidance, req.AcceptanceCriteria, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID, req.ParentTaskID, req.TaskType, req.UserStory)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -503,6 +512,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		Status:     r.URL.Query().Get("status"),
 		AssignedTo: r.URL.Query().Get("assigned_to"),
 		ProjectID:  r.URL.Query().Get("project_id"),
+		ParentID:   r.URL.Query().Get("parent_id"),
 	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		fmt.Sscanf(l, "%d", &f.Limit)
