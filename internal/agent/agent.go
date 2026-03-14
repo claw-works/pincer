@@ -29,6 +29,7 @@ type Agent struct {
 	Status        Status    `json:"status"`
 	RegisteredAt  time.Time `json:"registered_at"`
 	LastHeartbeat time.Time `json:"last_heartbeat"`
+	UserID        string    `json:"user_id,omitempty"`
 }
 
 type Registry struct {

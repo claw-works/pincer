@@ -345,7 +345,7 @@ func (s *Server) registerAgent(w http.ResponseWriter, r *http.Request) {
 		jsonResp(w, http.StatusOK, a)
 		return
 	}
-	a, err := s.agents.Register(r.Context(), req.ID, req.Name, req.Capabilities, req.Type)
+	a, err := s.agents.Register(r.Context(), req.ID, req.Name, req.Capabilities, req.Type, auth.FromContext(r.Context()).ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -371,6 +371,12 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getInbox(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	user := auth.FromContext(r.Context())
+	a, err := s.agents.Get(r.Context(), id)
+	if err != nil || a.UserID != user.ID {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
 	msgs := s.hub.PopInboxHTTP(id)
 	jsonResp(w, http.StatusOK, msgs)
 }
@@ -412,7 +418,8 @@ func (s *Server) listConversation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.agents.List(r.Context())
+	user := auth.FromContext(r.Context())
+	agents, err := s.agents.List(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -456,7 +463,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if req.AssignedTo == "" {
 		req.AssignedTo = req.AssignedAgentID
 	}
-	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.Guidance, req.AcceptanceCriteria, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID, req.ParentTaskID, req.TaskType, req.UserStory)
+	user := auth.FromContext(r.Context())
+	t, err := s.tasks.Create(r.Context(), req.Title, req.Description, req.Guidance, req.AcceptanceCriteria, req.RequiredCapabilities, task.Priority(req.Priority), req.ReportChannel, req.ProjectID, req.ParentTaskID, req.TaskType, req.UserStory, user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -508,11 +516,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
+	user := auth.FromContext(r.Context())
 	f := task.ListFilter{
 		Status:     r.URL.Query().Get("status"),
 		AssignedTo: r.URL.Query().Get("assigned_to"),
 		ProjectID:  r.URL.Query().Get("project_id"),
 		ParentID:   r.URL.Query().Get("parent_id"),
+		OwnerID:    user.ID,
 	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		fmt.Sscanf(l, "%d", &f.Limit)
@@ -779,6 +789,15 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if req.ToAgentID == "" {
 		http.Error(w, "to_agent_id required", http.StatusBadRequest)
 		return
+	}
+	// P0 security: verify from_agent_id belongs to the calling user
+	if req.FromAgentID != "" {
+		user := auth.FromContext(r.Context())
+		fromAgent, err := s.agents.Get(r.Context(), req.FromAgentID)
+		if err != nil || fromAgent.UserID != user.ID {
+			http.Error(w, `{"error":"forbidden: from_agent_id does not belong to you"}`, http.StatusForbidden)
+			return
+		}
 	}
 	msgType := hub.MessageType(req.Type)
 	if msgType == "" {
@@ -1281,7 +1300,7 @@ func (s *Server) generateDailyReports(ctx context.Context) {
 
 	// Build agent id → name map
 	agentMap := map[string]string{}
-	if agents, err := s.agents.List(ctx); err == nil {
+	if agents, err := s.agents.List(ctx, ""); err == nil {
 		for _, a := range agents {
 			agentMap[a.ID] = a.Name
 		}

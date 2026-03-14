@@ -19,7 +19,7 @@ func NewPGStore(db *store.DB) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) Create(ctx context.Context, title, description, guidance string, acceptanceCriteria []string, required []string, priority Priority, rc *ReportChannel, projectID string, parentTaskID, taskType, userStory string) (*Task, error) {
+func (s *PGStore) Create(ctx context.Context, title, description, guidance string, acceptanceCriteria []string, required []string, priority Priority, rc *ReportChannel, projectID string, parentTaskID, taskType, userStory string, ownerID string) (*Task, error) {
 	if taskType == "" {
 		taskType = "task"
 	}
@@ -63,10 +63,15 @@ func (s *PGStore) Create(ctx context.Context, title, description, guidance strin
 		acJSON, _ = json.Marshal(acceptanceCriteria)
 	}
 
+	var oid interface{}
+	if ownerID != "" {
+		oid = ownerID
+	}
+
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO tasks (id, title, description, guidance, acceptance_criteria, required_capabilities, priority, status, report_channel, project_id, parent_task_id, task_type, user_story, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-		t.ID, t.Title, t.Description, t.Guidance, acJSON, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, parentID, t.TaskType, nullStr(t.UserStory), t.CreatedAt, t.UpdatedAt,
+		`INSERT INTO tasks (id, title, description, guidance, acceptance_criteria, required_capabilities, priority, status, report_channel, project_id, parent_task_id, task_type, user_story, owner_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		t.ID, t.Title, t.Description, t.Guidance, acJSON, t.RequiredCapabilities, t.Priority, string(t.Status), rcJSON, pid, parentID, t.TaskType, nullStr(t.UserStory), oid, t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
@@ -86,12 +91,13 @@ func (s *PGStore) Get(ctx context.Context, id string) (*Task, error) {
 
 // ListFilter holds optional filters for List queries.
 type ListFilter struct {
-	Status     string // "" = all, "active" = not done/failed, or exact status
-	ProjectID  string // filter by project
-	AssignedTo string // filter by agent id
-	ParentID   string // filter by parent task (Epic/Story children)
-	Limit      int    // 0 = no limit; max 500
-	Offset     int    // pagination offset
+	Status     string
+	ProjectID  string
+	AssignedTo string
+	ParentID   string
+	OwnerID    string // tenant isolation
+	Limit      int
+	Offset     int
 }
 
 func (s *PGStore) List(ctx context.Context, statusFilter string) ([]*Task, error) {
@@ -132,6 +138,12 @@ func (s *PGStore) ListFiltered(ctx context.Context, f ListFilter) ([]*Task, erro
 	if f.ParentID != "" {
 		base += fmt.Sprintf(" AND parent_task_id=$%d", n)
 		args = append(args, f.ParentID)
+		n++
+	}
+
+	if f.OwnerID != "" {
+		base += fmt.Sprintf(" AND owner_id=$%d", n)
+		args = append(args, f.OwnerID)
 		n++
 	}
 

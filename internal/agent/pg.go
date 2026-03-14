@@ -22,7 +22,7 @@ func NewPGRegistry(db *store.DB) *PGRegistry {
 // (idempotent upsert: re-registering an existing agent updates its fields and
 // returns the existing record — no ghost agents). If id is empty, a new UUID
 // is generated.
-func (r *PGRegistry) Register(ctx context.Context, id, name string, capabilities []string, agentType AgentType) (*Agent, error) {
+func (r *PGRegistry) Register(ctx context.Context, id, name string, capabilities []string, agentType AgentType, userID string) (*Agent, error) {
 	if id == "" {
 		id = uuid.New().String()
 	}
@@ -30,12 +30,16 @@ func (r *PGRegistry) Register(ctx context.Context, id, name string, capabilities
 		agentType = TypeAgent
 	}
 	now := time.Now()
+	var uid interface{}
+	if userID != "" {
+		uid = userID
+	}
 	_, err := r.db.PG.Exec(ctx,
-		`INSERT INTO agents (id, name, type, capabilities, status, registered_at, last_heartbeat)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO agents (id, name, type, capabilities, status, registered_at, last_heartbeat, user_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 ON CONFLICT (id) DO UPDATE
 		   SET name=$2, type=$3, capabilities=$4, status=$5, last_heartbeat=$7`,
-		id, name, string(agentType), capabilities, string(StatusOnline), now, now,
+		id, name, string(agentType), capabilities, string(StatusOnline), now, now, uid,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("register agent: %w", err)
@@ -51,13 +55,27 @@ func (r *PGRegistry) Heartbeat(ctx context.Context, id string) bool {
 
 func (r *PGRegistry) Get(ctx context.Context, id string) (*Agent, error) {
 	row := r.db.PG.QueryRow(ctx,
-		`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat FROM agents WHERE id=$1`, id)
+		`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat, COALESCE(user_id,'') FROM agents WHERE id=$1`, id)
 	return scanAgent(row)
 }
 
-func (r *PGRegistry) List(ctx context.Context) ([]*Agent, error) {
-	rows, err := r.db.PG.Query(ctx,
-		`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat FROM agents ORDER BY registered_at DESC`)
+func (r *PGRegistry) List(ctx context.Context, userID string) ([]*Agent, error) {
+	var rows interface {
+		Close()
+		Next() bool
+		Err() error
+		Scan(dest ...any) error
+	}
+	var err error
+	if userID != "" {
+		rows, err = r.db.PG.Query(ctx,
+			`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat, COALESCE(user_id,'')
+			 FROM agents WHERE user_id=$1 ORDER BY registered_at DESC`, userID)
+	} else {
+		rows, err = r.db.PG.Query(ctx,
+			`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat, COALESCE(user_id,'')
+			 FROM agents ORDER BY registered_at DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +93,7 @@ func (r *PGRegistry) List(ctx context.Context) ([]*Agent, error) {
 
 func (r *PGRegistry) FindCapable(ctx context.Context, required []string) ([]*Agent, error) {
 	rows, err := r.db.PG.Query(ctx,
-		`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat
+		`SELECT id, name, COALESCE(type, 'agent'), capabilities, status, registered_at, last_heartbeat, COALESCE(user_id,'')
 		 FROM agents WHERE status='online' AND capabilities @> $1`, required)
 	if err != nil {
 		return nil, err
@@ -147,7 +165,7 @@ type scanner interface {
 func scanAgent(s scanner) (*Agent, error) {
 	a := &Agent{}
 	var status, agentType string
-	err := s.Scan(&a.ID, &a.Name, &agentType, &a.Capabilities, &status, &a.RegisteredAt, &a.LastHeartbeat)
+	err := s.Scan(&a.ID, &a.Name, &agentType, &a.Capabilities, &status, &a.RegisteredAt, &a.LastHeartbeat, &a.UserID)
 	if err != nil {
 		return nil, err
 	}

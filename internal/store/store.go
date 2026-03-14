@@ -184,6 +184,10 @@ func (db *DB) Migrate(ctx context.Context) error {
 		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS user_story     TEXT;
 		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS acceptance_criteria JSONB;
 		CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_task_id);
+
+		-- P0 security: tenant isolation
+		ALTER TABLE tasks  ADD COLUMN IF NOT EXISTS owner_id TEXT REFERENCES users(id);
+		CREATE INDEX IF NOT EXISTS idx_tasks_owner_id ON tasks(owner_id);
 	`)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
