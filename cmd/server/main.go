@@ -1178,8 +1178,9 @@ func (s *Server) listRoomMessages(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(l, "%d", &limit)
 	}
 	beforeID := r.URL.Query().Get("before")
+	since := r.URL.Query().Get("since")
 
-	msgs, err := s.rooms.List(r.Context(), roomID, limit, beforeID)
+	msgs, err := s.rooms.List(r.Context(), roomID, limit, beforeID, since)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

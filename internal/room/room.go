@@ -89,20 +89,35 @@ func (s *Store) Post(ctx context.Context, roomID, senderAgentID, content string,
 
 // List returns up to limit messages in the room, sorted newest-first.
 // If beforeID is set, returns messages older than that message.
-func (s *Store) List(ctx context.Context, roomID string, limit int, beforeID string) ([]*Message, error) {
+// If since is set (RFC3339/ISO8601), returns messages newer than that time (sorted oldest-first for pagination).
+func (s *Store) List(ctx context.Context, roomID string, limit int, beforeID string, since string) ([]*Message, error) {
 	if limit <= 0 {
 		limit = defaultLimit
 	}
 	filter := bson.M{"room_id": roomID}
 	if beforeID != "" {
-		// Find the created_at of beforeID first
 		var ref Message
 		if err := s.coll.FindOne(ctx, bson.M{"_id": beforeID}).Decode(&ref); err == nil {
 			filter["created_at"] = bson.M{"$lt": ref.CreatedAt}
 		}
 	}
+	if since != "" {
+		if sinceTime, err := time.Parse(time.RFC3339Nano, since); err == nil {
+			if existing, ok := filter["created_at"].(bson.M); ok {
+				existing["$gt"] = sinceTime
+			} else {
+				filter["created_at"] = bson.M{"$gt": sinceTime}
+			}
+		}
+	}
+
+	// When since is set, return oldest-first so frontend can paginate forward.
+	sortDir := -1
+	if since != "" && beforeID == "" {
+		sortDir = 1
+	}
 	opts := mongoOpts.Find().
-		SetSort(bson.D{{Key: "created_at", Value: -1}}).
+		SetSort(bson.D{{Key: "created_at", Value: sortDir}}).
 		SetLimit(int64(limit))
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
