@@ -246,6 +246,7 @@ func main() {
 		r.Post("/agents/{id}/heartbeat", s.agentHeartbeat)
 		r.Get("/agents/{id}/inbox", s.getInbox)
 		r.Get("/admin/unowned-agents", s.listUnownedAgents)
+		r.Post("/admin/backfill-owners", s.backfillOwners)
 		r.Get("/agents/{id}/messages", s.listAgentMessages)
 		r.Get("/conversations", s.listConversation)
 
@@ -1522,4 +1523,39 @@ func (s *Server) setAgentOwner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResp(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// backfillOwners sets owner_id on all tasks/projects with NULL owner to the given user_id.
+// POST /api/v1/admin/backfill-owners  body: {"user_id":"<uuid>","resource":"tasks|projects|all"}
+func (s *Server) backfillOwners(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID   string `json:"user_id"`
+		Resource string `json:"resource"` // "tasks", "projects", "all"
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		http.Error(w, `{"error":"user_id required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Resource == "" {
+		req.Resource = "all"
+	}
+	result := map[string]int64{}
+	ctx := r.Context()
+	if req.Resource == "tasks" || req.Resource == "all" {
+		tag, err := s.store.PG.Exec(ctx,
+			`UPDATE tasks SET owner_id=$1 WHERE owner_id IS NULL`, req.UserID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		result["tasks"] = tag.RowsAffected()
+	}
+	if req.Resource == "projects" || req.Resource == "all" {
+		tag, err := s.store.PG.Exec(ctx,
+			`UPDATE projects SET user_id=$1 WHERE user_id IS NULL OR user_id=''`, req.UserID)
+		if err == nil {
+			result["projects"] = tag.RowsAffected()
+		}
+	}
+	jsonResp(w, http.StatusOK, result)
 }
