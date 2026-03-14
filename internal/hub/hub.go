@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -74,6 +75,9 @@ type Hub struct {
 	mu           sync.RWMutex
 	clients      map[string]*Client
 	inbox        inboxBackend
+	pubsub       PubSub
+	ctx          context.Context
+	cancel       context.CancelFunc
 	onRegister   OnRegisterFunc
 	onHeartbeat  OnHeartbeatFunc
 	onTaskUpdate OnTaskUpdateFunc
@@ -81,10 +85,26 @@ type Hub struct {
 }
 
 func New() *Hub {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Hub{
 		clients: make(map[string]*Client),
 		inbox:   nopInbox{},
+		pubsub:  nopPubSub{},
+		ctx:     ctx,
+		cancel:  cancel,
 	}
+}
+
+// SetPubSub configures the cross-instance pub/sub backend.
+// Call before any agents connect.
+func (h *Hub) SetPubSub(ps PubSub) {
+	h.pubsub = ps
+}
+
+// Close shuts down the hub and pub/sub connections.
+func (h *Hub) Close() {
+	h.cancel()
+	h.pubsub.Close()
 }
 
 func (h *Hub) SetInbox(ib inboxBackend)            { h.inbox = ib }
@@ -139,6 +159,11 @@ func (h *Hub) Register(agentID string, conn *websocket.Conn) *Client {
 	h.mu.Unlock()
 	go c.writePump()
 
+	// Subscribe to Redis channel for cross-instance delivery.
+	_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
+		h.deliverLocal(agentID, msg)
+	}, agentID)
+
 	// Deliver any pending offline messages immediately on connect.
 	go h.deliverInbox(agentID, c)
 	return c
@@ -163,6 +188,7 @@ func (h *Hub) Unregister(agentID string) {
 	h.mu.Lock()
 	delete(h.clients, agentID)
 	h.mu.Unlock()
+	_ = h.pubsub.Unsubscribe(h.ctx, agentID)
 }
 
 // RegisterHuman registers a human user's WebSocket connection.
@@ -180,6 +206,12 @@ func (h *Hub) RegisterHuman(userID string, conn *websocket.Conn) *Client {
 	h.clients[userID] = c
 	h.mu.Unlock()
 	go c.writePump()
+
+	// Subscribe to Redis channel for cross-instance delivery.
+	_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
+		h.deliverLocal(userID, msg)
+	}, userID)
+
 	// Deliver any pending offline messages immediately.
 	go h.deliverInbox(userID, c)
 	return c
@@ -241,13 +273,38 @@ func (h *Hub) Send(to string, msg Message) {
 			h.inbox.SaveOffline(to, msg)
 		}
 	} else {
-		log.Printf("hub: agent %s offline, saving to inbox", to)
-		h.inbox.SaveOffline(to, msg)
+		// Publish to Redis so another instance that has this agent's WS can deliver it.
+		if pubErr := h.pubsub.Publish(h.ctx, to, msg); pubErr != nil {
+			log.Printf("hub: redis publish to %s failed: %v — falling back to inbox", to, pubErr)
+			h.inbox.SaveOffline(to, msg)
+		} else {
+			// Also save offline copy in case no instance currently holds the WS.
+			h.inbox.SaveOffline(to, msg)
+		}
 	}
 
 	// Persist all agent DMs for monitor/history visibility
 	if msg.Type == MsgTypeAgentMessage {
 		h.inbox.SaveDM(to, msg)
+	}
+}
+
+// deliverLocal delivers a message received from Redis pub/sub to a locally-connected client.
+func (h *Hub) deliverLocal(agentID string, msg Message) {
+	h.mu.RLock()
+	c, online := h.clients[agentID]
+	h.mu.RUnlock()
+	if !online {
+		return
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
+		log.Printf("hub: deliverLocal buffer full for agent %s", agentID)
 	}
 }
 

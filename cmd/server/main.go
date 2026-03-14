@@ -73,6 +73,12 @@ func main() {
 		log.Println("hub: MongoDB not available, inbox disabled (nopInbox)")
 	}
 
+	// Redis pub/sub for cross-instance WS delivery (multi-replica support).
+	// Gracefully degrades to nop when REDIS_URL is not set.
+	if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+		h.SetPubSub(hub.NewRedisPubSub(redisURL))
+	}
+
 	s := &Server{
 		store:    db,
 		agents:   agent.NewPGRegistry(db),
