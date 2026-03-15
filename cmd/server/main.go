@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +29,12 @@ import (
 	"github.com/claw-works/pincer/internal/task"
 	"github.com/claw-works/pincer/pkg/protocol"
 )
+
+// staticFiles embeds the pincer-monitor web app (built into dist/ at release time).
+// The dist/ directory is populated by the GH Actions release workflow.
+//
+//go:embed all:dist
+var staticFiles embed.FS
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -214,6 +222,17 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
+
+	// Serve embedded pincer-monitor SPA at /app (and /app/*)
+	// dist/ is populated by GH Actions before go build.
+	webFS, err := fs.Sub(staticFiles, "dist")
+	if err == nil {
+		fileServer := http.FileServer(http.FS(webFS))
+		r.Get("/app", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/app/", http.StatusMovedPermanently)
+		})
+		r.Handle("/app/*", http.StripPrefix("/app/", fileServer))
+	}
 
 	// Public routes (no auth) — bootstrap only
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {

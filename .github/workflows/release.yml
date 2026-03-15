@@ -10,8 +10,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  build-frontend:
+    name: Build pincer-monitor (Web UI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone pincer-monitor
+        run: git clone https://github.com/claw-works/pincer-monitor.git /tmp/pincer-monitor
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install & Build
+        working-directory: /tmp/pincer-monitor
+        env:
+          VITE_BASE_PATH: /app/
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-dist
+          path: /tmp/pincer-monitor/dist
+
   build-binary:
     name: Build Binaries
+    needs: build-frontend
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,6 +52,12 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download monitor dist
+        uses: actions/download-artifact@v4
+        with:
+          name: monitor-dist
+          path: cmd/server/dist
 
       - uses: actions/setup-go@v5
         with:
@@ -52,6 +86,12 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download monitor dist (for Dockerfile)
+        uses: actions/download-artifact@v4
+        with:
+          name: monitor-dist
+          path: cmd/server/dist
 
       - name: Download linux/amd64 binary
         uses: actions/download-artifact@v4
