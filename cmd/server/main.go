@@ -848,6 +848,18 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		ConversationID: req.ConversationID,
 		Payload:        req.Payload,
 	})
+	// Echo the message back to the sender so all their connected clients
+	// see it immediately (multi-device support).
+	if req.FromAgentID != "" && req.FromAgentID != req.ToAgentID {
+		echo := hub.Message{
+			Type:           msgType,
+			From:           req.FromAgentID,
+			To:             req.ToAgentID, // keep To so frontend knows the conversation partner
+			ConversationID: req.ConversationID,
+			Payload:        req.Payload,
+		}
+		s.hub.Send(req.FromAgentID, echo)
+	}
 	jsonResp(w, http.StatusOK, map[string]string{"status": "sent"})
 }
 

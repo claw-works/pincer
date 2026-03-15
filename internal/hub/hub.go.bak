@@ -73,7 +73,7 @@ type OnTaskResultFunc func(agentID string, p protocol.TaskResultPayload)
 
 type Hub struct {
 	mu           sync.RWMutex
-	clients      map[string][]*Client // agentID → all active WS connections
+	clients      map[string]*Client
 	inbox        inboxBackend
 	pubsub       PubSub
 	ctx          context.Context
@@ -87,7 +87,7 @@ type Hub struct {
 func New() *Hub {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Hub{
-		clients: make(map[string][]*Client),
+		clients: make(map[string]*Client),
 		inbox:   nopInbox{},
 		pubsub:  nopPubSub{},
 		ctx:     ctx,
@@ -113,11 +113,12 @@ func (h *Hub) SetOnHeartbeat(f OnHeartbeatFunc)    { h.onHeartbeat = f }
 func (h *Hub) SetOnTaskUpdate(f OnTaskUpdateFunc)  { h.onTaskUpdate = f }
 func (h *Hub) SetOnTaskResult(f OnTaskResultFunc)  { h.onTaskResult = f }
 
-// IsOnlineWS reports whether the agent has at least one active WS connection.
+// IsOnlineWS reports whether the agent has an active WS connection.
 func (h *Hub) IsOnlineWS(agentID string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return len(h.clients[agentID]) > 0
+	_, ok := h.clients[agentID]
+	return ok
 }
 
 // PopInboxHTTP is for HTTP-polling agents.
@@ -130,6 +131,7 @@ func (h *Hub) PopInboxHTTP(agentID string) []Message {
 	}
 	return h.inbox.PopOffline(agentID)
 }
+
 // ListAgentMessages returns inbox history for monitor/observability use (read-only, no pop).
 func (h *Hub) ListAgentMessages(agentID string, fromAgentID string, limit int) []InboxMessage {
 	return h.inbox.ListMessages(agentID, fromAgentID, limit)
@@ -153,17 +155,14 @@ func (h *Hub) Register(agentID string, conn *websocket.Conn) *Client {
 		send:          make(chan []byte, 64),
 	}
 	h.mu.Lock()
-	h.clients[agentID] = append(h.clients[agentID], c)
-	isFirst := len(h.clients[agentID]) == 1
+	h.clients[agentID] = c
 	h.mu.Unlock()
 	go c.writePump()
 
-	// Subscribe to Redis channel only on first connection for this agent.
-	if isFirst {
-		_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
-			h.deliverLocal(agentID, msg)
-		}, agentID)
-	}
+	// Subscribe to Redis channel for cross-instance delivery.
+	_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
+		h.deliverLocal(agentID, msg)
+	}, agentID)
 
 	// Deliver any pending offline messages immediately on connect.
 	go h.deliverInbox(agentID, c)
@@ -185,24 +184,11 @@ func (h *Hub) deliverInbox(agentID string, c *Client) {
 	}
 }
 
-func (h *Hub) Unregister(agentID string, conn *websocket.Conn) {
+func (h *Hub) Unregister(agentID string) {
 	h.mu.Lock()
-	conns := h.clients[agentID]
-	for i, c := range conns {
-		if c.conn == conn {
-			h.clients[agentID] = append(conns[:i], conns[i+1:]...)
-			break
-		}
-	}
-	remaining := len(h.clients[agentID])
-	if remaining == 0 {
-		delete(h.clients, agentID)
-	}
+	delete(h.clients, agentID)
 	h.mu.Unlock()
-	// Unsubscribe from Redis only when no connections remain.
-	if remaining == 0 {
-		_ = h.pubsub.Unsubscribe(h.ctx, agentID)
-	}
+	_ = h.pubsub.Unsubscribe(h.ctx, agentID)
 }
 
 // RegisterHuman registers a human user's WebSocket connection.
@@ -217,17 +203,14 @@ func (h *Hub) RegisterHuman(userID string, conn *websocket.Conn) *Client {
 		send:          make(chan []byte, 64),
 	}
 	h.mu.Lock()
-	h.clients[userID] = append(h.clients[userID], c)
-	isFirst := len(h.clients[userID]) == 1
+	h.clients[userID] = c
 	h.mu.Unlock()
 	go c.writePump()
 
-	// Subscribe to Redis channel only on first connection for this user.
-	if isFirst {
-		_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
-			h.deliverLocal(userID, msg)
-		}, userID)
-	}
+	// Subscribe to Redis channel for cross-instance delivery.
+	_ = h.pubsub.Subscribe(h.ctx, func(msg Message) {
+		h.deliverLocal(userID, msg)
+	}, userID)
 
 	// Deliver any pending offline messages immediately.
 	go h.deliverInbox(userID, c)
@@ -238,7 +221,7 @@ func (h *Hub) RegisterHuman(userID string, conn *websocket.Conn) *Client {
 // It only processes ping/pong keepalive frames; unregisters on disconnect.
 func (h *Hub) ReadLoopHuman(c *Client) {
 	defer func() {
-		h.Unregister(c.AgentID, c.conn)
+		h.Unregister(c.AgentID)
 		close(c.send)
 		c.conn.Close()
 	}()
@@ -274,7 +257,7 @@ func (h *Hub) Send(to string, msg Message) {
 	}
 
 	h.mu.RLock()
-	conns := h.clients[to]
+	c, online := h.clients[to]
 	h.mu.RUnlock()
 
 	data, err := json.Marshal(msg)
@@ -282,22 +265,20 @@ func (h *Hub) Send(to string, msg Message) {
 		return
 	}
 
-	if len(conns) > 0 {
-		// Deliver to all active connections for this agent.
-		for _, c := range conns {
-			select {
-			case c.send <- data:
-			default:
-				log.Printf("hub: send buffer full for agent %s conn, saving to inbox", to)
-				h.inbox.SaveOffline(to, msg)
-			}
+	if online {
+		select {
+		case c.send <- data:
+		default:
+			log.Printf("hub: send buffer full for agent %s, saving to inbox", to)
+			h.inbox.SaveOffline(to, msg)
 		}
 	} else {
-		// Agent offline — try Redis pub/sub, then fall back to inbox.
+		// Publish to Redis so another instance that has this agent's WS can deliver it.
 		if pubErr := h.pubsub.Publish(h.ctx, to, msg); pubErr != nil {
 			log.Printf("hub: redis publish to %s failed: %v — falling back to inbox", to, pubErr)
 			h.inbox.SaveOffline(to, msg)
 		} else {
+			// Also save offline copy in case no instance currently holds the WS.
 			h.inbox.SaveOffline(to, msg)
 		}
 	}
@@ -308,24 +289,22 @@ func (h *Hub) Send(to string, msg Message) {
 	}
 }
 
-// deliverLocal delivers a message received from Redis pub/sub to all locally-connected clients.
+// deliverLocal delivers a message received from Redis pub/sub to a locally-connected client.
 func (h *Hub) deliverLocal(agentID string, msg Message) {
 	h.mu.RLock()
-	conns := h.clients[agentID]
+	c, online := h.clients[agentID]
 	h.mu.RUnlock()
-	if len(conns) == 0 {
+	if !online {
 		return
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}
-	for _, c := range conns {
-		select {
-		case c.send <- data:
-		default:
-			log.Printf("hub: deliverLocal buffer full for agent %s", agentID)
-		}
+	select {
+	case c.send <- data:
+	default:
+		log.Printf("hub: deliverLocal buffer full for agent %s", agentID)
 	}
 }
 
@@ -342,12 +321,10 @@ func (h *Hub) Broadcast(msg Message) {
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	for _, conns := range h.clients {
-		for _, c := range conns {
-			select {
-			case c.send <- data:
-			default:
-			}
+	for _, c := range h.clients {
+		select {
+		case c.send <- data:
+		default:
 		}
 	}
 }
@@ -435,7 +412,7 @@ func (c *Client) writePump() {
 
 func (c *Client) ReadPump(h *Hub, onMsg func(agentID string, msg Message)) {
 	defer func() {
-		h.Unregister(c.AgentID, c.conn)
+		h.Unregister(c.AgentID)
 		close(c.send)
 		c.conn.Close()
 	}()
