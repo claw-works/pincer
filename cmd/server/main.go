@@ -292,8 +292,10 @@ func main() {
 		r.Post("/report-jobs", s.createReportJob)
 		r.Get("/report-jobs/{id}", s.getReportJob)
 		r.Patch("/report-jobs/{id}", s.patchReportJob)
+		r.Delete("/report-jobs/{id}", s.deleteReportJob)
 		r.Post("/report-jobs/{id}/reports", s.submitAgentReport)
 		r.Get("/report-jobs/{id}/reports", s.listAgentReportsByJob)
+		r.Delete("/report-jobs/{id}/reports/{reportId}", s.deleteAgentReport)
 
 		// Agent reports (global)
 		r.Get("/reports", s.listAllAgentReports)
@@ -1600,6 +1602,24 @@ func (s *Server) patchReportJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResp(w, http.StatusOK, job)
+}
+
+func (s *Server) deleteReportJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.agentReports.DeleteJob(r.Context(), id); err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteAgentReport(w http.ResponseWriter, r *http.Request) {
+	reportId := chi.URLParam(r, "reportId")
+	if err := s.agentReports.DeleteReport(r.Context(), reportId); err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) submitAgentReport(w http.ResponseWriter, r *http.Request) {

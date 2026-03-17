@@ -130,6 +130,34 @@ func (s *Store) ListJobs(ctx context.Context) ([]*Job, error) {
 
 // ── Agent Reports ─────────────────────────────────────────────────────────────
 
+// DeleteJob removes a report job and all its associated reports.
+func (s *Store) DeleteJob(ctx context.Context, id string) error {
+	_, err := s.db.PG.Exec(ctx, `DELETE FROM agent_reports WHERE job_id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("delete reports for job: %w", err)
+	}
+	tag, err := s.db.PG.Exec(ctx, `DELETE FROM report_jobs WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("delete report job: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("report job not found")
+	}
+	return nil
+}
+
+// DeleteReport removes a single agent report by ID.
+func (s *Store) DeleteReport(ctx context.Context, id string) error {
+	tag, err := s.db.PG.Exec(ctx, `DELETE FROM agent_reports WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("delete report: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("report not found")
+	}
+	return nil
+}
+
 func (s *Store) SubmitReport(ctx context.Context, jobID, agentID, title, content string, metadata json.RawMessage) (*Report, error) {
 	r := &Report{
 		Summary: Summary{
