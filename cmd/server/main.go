@@ -274,6 +274,9 @@ func main() {
 		r.Get("/admin/unowned-agents", s.listUnownedAgents)
 		r.Post("/admin/backfill-owners", s.backfillOwners)
 		r.Get("/agents/{id}/messages", s.listAgentMessages)
+		// Agent WebSocket — real-time push for AI agents (OpenClaw plugins etc.)
+		// Usage: ws://<host>/api/v1/agents/{id}/ws?api_key=<key>
+		r.Get("/agents/{id}/ws", s.agentWsHandler)
 		r.Get("/conversations", s.listConversation)
 
 		// Project routes
@@ -1006,6 +1009,45 @@ func (s *Server) inboxWsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("inboxws: user %s connected", user.ID)
 	s.hub.ReadLoopHuman(client)
 	log.Printf("inboxws: user %s disconnected", user.ID)
+}
+
+// agentWsHandler upgrades the connection to WebSocket for an AI agent.
+// The agent receives real-time messages pushed by the hub (DMs, task events).
+// Auth: X-API-Key header OR ?api_key=<key> query param (already validated by middleware).
+// The {id} path param must be an agent owned by the authenticated user.
+//
+// Usage: ws://<host>/api/v1/agents/{id}/ws?api_key=<key>
+func (s *Server) agentWsHandler(w http.ResponseWriter, r *http.Request) {
+	user := auth.FromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	agentID := chi.URLParam(r, "id")
+	if agentID == "" {
+		http.Error(w, `{"error":"agent id required"}`, http.StatusBadRequest)
+		return
+	}
+	// Verify the agent belongs to the authenticated user.
+	agent, err := s.agents.Get(r.Context(), agentID)
+	if err != nil || agent.UserID != user.ID {
+		http.Error(w, `{"error":"agent not found or forbidden"}`, http.StatusForbidden)
+		return
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	client := s.hub.Register(agentID, conn)
+	log.Printf("agentws: agent %s connected", agentID)
+	client.ReadPump(s.hub, func(from string, msg hub.Message) {
+		if msg.To != "" {
+			s.hub.Send(msg.To, msg)
+		} else {
+			s.hub.Broadcast(msg)
+		}
+	})
+	log.Printf("agentws: agent %s disconnected", agentID)
 }
 
 // ─── User Handlers ─────────────────────────────────────────────────────────
