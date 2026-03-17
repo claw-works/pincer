@@ -291,6 +291,7 @@ func main() {
 		r.Get("/report-jobs", s.listReportJobs)
 		r.Post("/report-jobs", s.createReportJob)
 		r.Get("/report-jobs/{id}", s.getReportJob)
+		r.Patch("/report-jobs/{id}", s.patchReportJob)
 		r.Post("/report-jobs/{id}/reports", s.submitAgentReport)
 		r.Get("/report-jobs/{id}/reports", s.listAgentReportsByJob)
 
@@ -1572,6 +1573,28 @@ func (s *Server) createReportJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getReportJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	job, err := s.agentReports.GetJob(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+	jsonResp(w, http.StatusOK, job)
+}
+
+func (s *Server) patchReportJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Name == nil && req.Description == nil {
+		http.Error(w, `{"error":"nothing to update"}`, http.StatusBadRequest)
+		return
+	}
+	job, err := s.agentReports.UpdateJob(r.Context(), id, req.Name, req.Description)
 	if err != nil {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		return

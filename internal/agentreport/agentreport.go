@@ -83,6 +83,29 @@ func (s *Store) GetJob(ctx context.Context, id string) (*Job, error) {
 	return j, nil
 }
 
+// UpdateJob updates mutable fields (name, description) of a report job.
+// Only non-empty fields in the patch are applied.
+func (s *Store) UpdateJob(ctx context.Context, id string, name, description *string) (*Job, error) {
+	existing, err := s.GetJob(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if name != nil && *name != "" {
+		existing.Name = *name
+	}
+	if description != nil {
+		existing.Description = *description
+	}
+	_, err = s.db.PG.Exec(ctx,
+		`UPDATE report_jobs SET name=$1, description=$2, updated_at=NOW() WHERE id=$3`,
+		existing.Name, existing.Description, id,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update report job: %w", err)
+	}
+	return s.GetJob(ctx, id)
+}
+
 func (s *Store) ListJobs(ctx context.Context) ([]*Job, error) {
 	rows, err := s.db.PG.Query(ctx,
 		`SELECT id, name, description, cron_expr, COALESCE(agent_id,''), enabled, created_at, updated_at
