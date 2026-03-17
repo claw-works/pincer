@@ -115,6 +115,10 @@ func (db *DB) Migrate(ctx context.Context) error {
 		ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo                TEXT NOT NULL DEFAULT '';
 		ALTER TABLE projects ADD COLUMN IF NOT EXISTS description         TEXT NOT NULL DEFAULT '';
 		ALTER TABLE projects ADD COLUMN IF NOT EXISTS overview            TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects ADD COLUMN IF NOT EXISTS room_id             TEXT;
+		ALTER TABLE projects ADD CONSTRAINT IF NOT EXISTS projects_room_id_unique UNIQUE (room_id);
+		-- Assign room UUIDs to existing projects that don't have one yet.
+		UPDATE projects SET room_id = gen_random_uuid()::text WHERE room_id IS NULL;
 		ALTER TABLE users    ADD COLUMN IF NOT EXISTS is_human            BOOLEAN NOT NULL DEFAULT false;
 		ALTER TABLE users    ADD COLUMN IF NOT EXISTS updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW();
 		ALTER TABLE users    ADD COLUMN IF NOT EXISTS room_id             TEXT;

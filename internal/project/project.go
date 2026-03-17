@@ -28,6 +28,7 @@ type Project struct {
 	Repo        string    `json:"repo"`
 	Description string    `json:"description"`
 	Overview    string    `json:"overview"`
+	RoomID      string    `json:"room_id"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -190,11 +191,12 @@ func (s *PGStore) CreateProject(ctx context.Context, userID, name, repo, descrip
 		Repo:        repo,
 		Description: description,
 		Overview:    overview,
+		RoomID:      uuid.New().String(),
 		CreatedAt:   time.Now(),
 	}
 	_, err := s.db.PG.Exec(ctx,
-		`INSERT INTO projects (id, user_id, name, repo, description, overview, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		p.ID, p.UserID, p.Name, p.Repo, p.Description, p.Overview, p.CreatedAt,
+		`INSERT INTO projects (id, user_id, name, repo, description, overview, room_id, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		p.ID, p.UserID, p.Name, p.Repo, p.Description, p.Overview, p.RoomID, p.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create project: %w", err)
@@ -205,8 +207,8 @@ func (s *PGStore) CreateProject(ctx context.Context, userID, name, repo, descrip
 func (s *PGStore) GetProject(ctx context.Context, id string) (*Project, error) {
 	p := &Project{}
 	err := s.db.PG.QueryRow(ctx,
-		`SELECT id, user_id, name, repo, description, overview, created_at FROM projects WHERE id=$1`, id,
-	).Scan(&p.ID, &p.UserID, &p.Name, &p.Repo, &p.Description, &p.Overview, &p.CreatedAt)
+		`SELECT id, user_id, name, repo, description, overview, COALESCE(room_id,''), created_at FROM projects WHERE id=$1`, id,
+	).Scan(&p.ID, &p.UserID, &p.Name, &p.Repo, &p.Description, &p.Overview, &p.RoomID, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get project: %w", err)
 	}
@@ -223,10 +225,10 @@ func (s *PGStore) ListProjects(ctx context.Context, userID string) ([]*Project, 
 	var err error
 	if userID != "" {
 		rows, err = s.db.PG.Query(ctx,
-			`SELECT id, user_id, name, repo, description, overview, created_at FROM projects WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+			`SELECT id, user_id, name, repo, description, overview, COALESCE(room_id,''), created_at FROM projects WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	} else {
 		rows, err = s.db.PG.Query(ctx,
-			`SELECT id, user_id, name, repo, description, overview, created_at FROM projects ORDER BY created_at DESC`)
+			`SELECT id, user_id, name, repo, description, overview, COALESCE(room_id,''), created_at FROM projects ORDER BY created_at DESC`)
 	}
 	if err != nil {
 		return nil, err
@@ -235,7 +237,7 @@ func (s *PGStore) ListProjects(ctx context.Context, userID string) ([]*Project, 
 	var projects []*Project
 	for rows.Next() {
 		p := &Project{}
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Repo, &p.Description, &p.Overview, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Name, &p.Repo, &p.Description, &p.Overview, &p.RoomID, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
