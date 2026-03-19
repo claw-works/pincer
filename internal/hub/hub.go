@@ -45,17 +45,17 @@ type inboxBackend interface {
 	SaveDM(agentID string, msg Message)
 	PopOffline(agentID string) []Message
 	ListMessages(agentID string, fromAgentID string, limit int) []InboxMessage
-	ListConversation(agentA, agentB string, limit int) []InboxMessage
+	ListConversation(agentA, agentB string, limit int, before time.Time) []InboxMessage
 	SearchDM(agentA, agentB, keyword string, limit, offset int) ([]InboxMessage, int64)
 }
 
 type nopInbox struct{}
 
-func (nopInbox) SaveOffline(_ string, _ Message)                               {}
-func (nopInbox) SaveDM(_ string, _ Message)                                    {}
-func (nopInbox) PopOffline(_ string) []Message                                 { return nil }
-func (nopInbox) ListMessages(_ string, _ string, _ int) []InboxMessage         { return nil }
-func (nopInbox) ListConversation(_ string, _ string, _ int) []InboxMessage     { return nil }
+func (nopInbox) SaveOffline(_ string, _ Message)                                             {}
+func (nopInbox) SaveDM(_ string, _ Message)                                                  {}
+func (nopInbox) PopOffline(_ string) []Message                                               { return nil }
+func (nopInbox) ListMessages(_ string, _ string, _ int) []InboxMessage                       { return nil }
+func (nopInbox) ListConversation(_ string, _ string, _ int, _ time.Time) []InboxMessage      { return nil }
 func (nopInbox) SearchDM(_, _, _ string, _, _ int) ([]InboxMessage, int64)     { return nil, 0 }
 
 // OnRegisterFunc is called when a REGISTER message arrives over WS.
@@ -136,8 +136,8 @@ func (h *Hub) ListAgentMessages(agentID string, fromAgentID string, limit int) [
 }
 
 // ListConversation returns bidirectional message history between two agents.
-func (h *Hub) ListConversation(agentA, agentB string, limit int) []InboxMessage {
-	return h.inbox.ListConversation(agentA, agentB, limit)
+func (h *Hub) ListConversation(agentA, agentB string, limit int, before time.Time) []InboxMessage {
+	return h.inbox.ListConversation(agentA, agentB, limit, before)
 }
 
 // SearchDM searches DM messages between two agents by keyword.

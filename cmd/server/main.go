@@ -449,7 +449,15 @@ func (s *Server) listConversation(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	msgs := s.hub.ListConversation(a, b, limit)
+	var before time.Time
+	if bs := r.URL.Query().Get("before"); bs != "" {
+		if t, err := time.Parse(time.RFC3339Nano, bs); err == nil {
+			before = t
+		} else if t, err := time.Parse(time.RFC3339, bs); err == nil {
+			before = t
+		}
+	}
+	msgs := s.hub.ListConversation(a, b, limit, before)
 	if msgs == nil {
 		msgs = []hub.InboxMessage{}
 	}

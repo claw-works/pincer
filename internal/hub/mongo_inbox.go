@@ -147,23 +147,34 @@ func (m *MongoInbox) ListMessages(agentID string, fromAgentID string, limit int)
 	return msgs
 }
 
-// ListConversation returns all DMs between two agents (both directions),
+// ListConversation returns DMs between two agents (both directions),
 // sorted by created_at ascending — suitable for chat view.
-func (m *MongoInbox) ListConversation(agentA, agentB string, limit int) []InboxMessage {
+// If before is non-zero, only messages created before that time are returned
+// (returns the most recent `limit` messages before that timestamp).
+func (m *MongoInbox) ListConversation(agentA, agentB string, limit int, before time.Time) []InboxMessage {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if limit <= 0 {
 		limit = 100
 	}
-	filter := bson.M{
-		"$or": bson.A{
-			bson.M{"to_agent_id": agentA, "from_agent_id": agentB},
-			bson.M{"to_agent_id": agentB, "from_agent_id": agentA},
-		},
+	pairFilter := bson.A{
+		bson.M{"to_agent_id": agentA, "from_agent_id": agentB},
+		bson.M{"to_agent_id": agentB, "from_agent_id": agentA},
 	}
+	filter := bson.M{"$or": pairFilter}
+	if !before.IsZero() {
+		filter = bson.M{
+			"$and": bson.A{
+				bson.M{"$or": pairFilter},
+				bson.M{"created_at": bson.M{"$lt": before}},
+			},
+		}
+	}
+
+	// Fetch the most recent `limit` messages before the cursor, then reverse to ASC order.
 	opts := mongoOpts.Find().
-		SetSort(bson.M{"created_at": 1}).
+		SetSort(bson.M{"created_at": -1}).
 		SetLimit(int64(limit))
 
 	cur, err := m.dmColl.Find(ctx, filter, opts)
@@ -175,6 +186,11 @@ func (m *MongoInbox) ListConversation(agentA, agentB string, limit int) []InboxM
 	var docs []inboxDoc
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil
+	}
+
+	// Reverse to chronological (ASC) order.
+	for i, j := 0, len(docs)-1; i < j; i, j = i+1, j-1 {
+		docs[i], docs[j] = docs[j], docs[i]
 	}
 
 	msgs := make([]InboxMessage, len(docs))
