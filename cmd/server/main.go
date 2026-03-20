@@ -284,6 +284,7 @@ func main() {
 		r.Get("/projects", s.listProjects)
 		r.Get("/projects/{id}", s.getProject)
 		r.Patch("/projects/{id}", s.updateProject)
+		r.Delete("/projects/{id}", s.deleteProject)
 		r.Get("/projects/{id}/tasks", s.listProjectTasks)
 		r.Get("/projects/{id}/reports", s.listProjectReports)
 
@@ -1256,6 +1257,15 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	jsonResp(w, http.StatusOK, p)
 }
 
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.projects.DeleteProject(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) listProjectTasks(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 	f := task.ListFilter{
@@ -1280,10 +1290,19 @@ func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	roomID := userRoomID(user)
-	jsonResp(w, http.StatusOK, []map[string]string{
-		{"id": roomID, "name": "default"},
-	})
+	rooms := []map[string]string{
+		{"id": userRoomID(user), "name": "default"},
+	}
+	// Include project rooms
+	projects, err := s.projects.ListProjects(r.Context(), user.ID)
+	if err == nil {
+		for _, p := range projects {
+			if p.RoomID != "" {
+				rooms = append(rooms, map[string]string{"id": p.RoomID, "name": p.Name})
+			}
+		}
+	}
+	jsonResp(w, http.StatusOK, rooms)
 }
 
 // postRoomMessage posts a message to a room.

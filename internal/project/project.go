@@ -255,3 +255,11 @@ func (s *PGStore) UpdateProject(ctx context.Context, id, repo, description, over
 	}
 	return s.GetProject(ctx, id)
 }
+
+func (s *PGStore) DeleteProject(ctx context.Context, id string) error {
+	_, err := s.db.PG.Exec(ctx, `DELETE FROM projects WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	return nil
+}
