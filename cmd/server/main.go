@@ -210,7 +210,7 @@ func main() {
 	// Background: reassign tasks stuck in 'running' > 5min (agent didn't ACK)
 	go func() {
 		for range time.Tick(30 * time.Second) {
-			staleAgentIDs := s.tasks.ReassignStale(ctx, 5*time.Minute)
+			staleAgentIDs := s.tasks.ReassignStale(ctx, 30*time.Minute)
 			for _, agentID := range staleAgentIDs {
 				s.agents.SetOnline(ctx, agentID)
 				log.Printf("reassign: agent %s freed (task ack timeout)", agentID)
@@ -312,6 +312,7 @@ func main() {
 		r.Patch("/tasks/{id}", s.patchTask)
 		r.Patch("/tasks/{id}/claim", s.claimTask)
 		r.Patch("/tasks/{id}/start", s.startTask)
+		r.Patch("/tasks/{id}/ack", s.ackTask)
 		r.Patch("/tasks/{id}/complete", s.completeTask)
 		r.Patch("/tasks/{id}/fail", s.failTask)
 		r.Patch("/tasks/{id}/submit", s.submitTask)
@@ -667,6 +668,16 @@ func (s *Server) startTask(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !s.tasks.Start(r.Context(), id) {
 		http.Error(w, "cannot start task", http.StatusConflict)
+		return
+	}
+	t, _ := s.tasks.Get(r.Context(), id)
+	jsonResp(w, http.StatusOK, t)
+}
+
+func (s *Server) ackTask(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.tasks.Ack(r.Context(), id); err != nil {
+		http.Error(w, "task not running or not found", http.StatusConflict)
 		return
 	}
 	t, _ := s.tasks.Get(r.Context(), id)

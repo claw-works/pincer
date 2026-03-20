@@ -241,6 +241,20 @@ func (s *PGStore) Start(ctx context.Context, id string) bool {
 	return true
 }
 
+// Ack refreshes assigned_at to prevent stale timeout.
+func (s *PGStore) Ack(ctx context.Context, id string) error {
+	tag, err := s.db.PG.Exec(ctx,
+		`UPDATE tasks SET assigned_at=NOW(), updated_at=NOW()
+		 WHERE id=$1 AND status='running'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task not running")
+	}
+	return nil
+}
+
 // ReassignStale resets tasks stuck in 'running' longer than timeout back to 'pending'.
 // 'assigned' tasks are NOT reverted — the agent may simply not be online yet.
 // Returns the list of stale agent IDs (so the caller can also mark the agents online).
