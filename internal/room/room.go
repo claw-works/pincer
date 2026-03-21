@@ -22,12 +22,21 @@ const (
 	defaultLimit = 20
 )
 
+// QuotedMessage is an embedded snapshot of a quoted message.
+type QuotedMessage struct {
+	ID            string `bson:"id"             json:"id"`
+	SenderAgentID string `bson:"sender_agent_id" json:"sender_agent_id"`
+	Content       string `bson:"content"        json:"content"`
+}
+
 // Message is a single chat room message.
 type Message struct {
 	ID            string                 `bson:"_id"      json:"id"`
 	RoomID        string                 `bson:"room_id"  json:"room_id"`
 	SenderAgentID string                 `bson:"sender_agent_id" json:"sender_agent_id"`
 	Content       string                 `bson:"content"  json:"content"`
+	QuoteID       string                 `bson:"quote_id,omitempty"  json:"quote_id,omitempty"`
+	Quote         *QuotedMessage         `bson:"quote,omitempty"     json:"quote,omitempty"`
 	Metadata      map[string]interface{} `bson:"metadata,omitempty" json:"metadata,omitempty"`
 	CreatedAt     time.Time              `bson:"created_at" json:"created_at"`
 	ExpiresAt     time.Time              `bson:"expires_at" json:"-"`
@@ -68,7 +77,8 @@ func DefaultRoomID(userID string) string {
 }
 
 // Post stores a new message in the room.
-func (s *Store) Post(ctx context.Context, roomID, senderAgentID, content string, metadata map[string]interface{}) (*Message, error) {
+// If quoteID is non-empty, the quoted message is looked up and embedded as a snapshot.
+func (s *Store) Post(ctx context.Context, roomID, senderAgentID, content, quoteID string, metadata map[string]interface{}) (*Message, error) {
 	now := time.Now().UTC()
 	msg := &Message{
 		ID:            uuid.New().String(),
@@ -79,12 +89,43 @@ func (s *Store) Post(ctx context.Context, roomID, senderAgentID, content string,
 		CreatedAt:     now,
 		ExpiresAt:     now.Add(messageTTL),
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if _, err := s.coll.InsertOne(ctx, msg); err != nil {
+	if quoteID != "" {
+		fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		var quoted Message
+		if err := s.coll.FindOne(fetchCtx, bson.M{"_id": quoteID}).Decode(&quoted); err == nil {
+			msg.QuoteID = quoteID
+			// Truncate snapshot content to 200 chars to keep documents small.
+			snap := quoted.Content
+			if len(snap) > 200 {
+				snap = snap[:200] + "…"
+			}
+			msg.Quote = &QuotedMessage{
+				ID:            quoted.ID,
+				SenderAgentID: quoted.SenderAgentID,
+				Content:       snap,
+			}
+		} else {
+			return nil, fmt.Errorf("room post: quote_id %q not found", quoteID)
+		}
+	}
+	postCtx, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel2()
+	if _, err := s.coll.InsertOne(postCtx, msg); err != nil {
 		return nil, fmt.Errorf("room post: %w", err)
 	}
 	return msg, nil
+}
+
+// GetByID fetches a single message by its ID.
+func (s *Store) GetByID(ctx context.Context, id string) (*Message, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var msg Message
+	if err := s.coll.FindOne(ctx, bson.M{"_id": id}).Decode(&msg); err != nil {
+		return nil, fmt.Errorf("room getbyid: %w", err)
+	}
+	return &msg, nil
 }
 
 // List returns up to limit messages in the room, sorted newest-first.

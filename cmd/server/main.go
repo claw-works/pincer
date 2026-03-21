@@ -1338,6 +1338,7 @@ func (s *Server) postRoomMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SenderAgentID string                 `json:"sender_agent_id"`
 		Content       string                 `json:"content"`
+		QuoteID       string                 `json:"quote_id,omitempty"`
 		Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
@@ -1349,7 +1350,7 @@ func (s *Server) postRoomMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msg, err := s.rooms.Post(r.Context(), roomID, req.SenderAgentID, req.Content, req.Metadata)
+	msg, err := s.rooms.Post(r.Context(), roomID, req.SenderAgentID, req.Content, req.QuoteID, req.Metadata)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1594,7 +1595,7 @@ func (s *Server) generateDailyReports(ctx context.Context) {
 
 		// Post to room (use user_id from project)
 		roomID := "user:" + p.UserID + ":default"
-		if _, err := s.rooms.Post(ctx, roomID, "hub", summary, nil); err != nil {
+		if _, err := s.rooms.Post(ctx, roomID, "hub", summary, "", nil); err != nil {
 			log.Printf("daily-report: post room error for %s: %v", p.ID, err)
 		} else {
 			s.monitor.Broadcast("room.message", map[string]interface{}{"room_id": roomID, "content": summary})
