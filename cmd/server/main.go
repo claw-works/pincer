@@ -1360,6 +1360,20 @@ func (s *Server) postRoomMessage(w http.ResponseWriter, r *http.Request) {
 	s.monitor.Broadcast("room.message", msg)
 	// Push real-time event to room-chat WebSocket subscribers
 	s.roomHub.BroadcastToRoom(roomID, "room.message", msg)
+	// Signal that the sender agent has finished replying (clears typing indicator on all clients).
+	if req.SenderAgentID != "" {
+		agentName := ""
+		if a, err2 := s.agents.Get(r.Context(), req.SenderAgentID); err2 == nil {
+			agentName = a.Name
+		}
+		donePayload := map[string]interface{}{
+			"room_id":    roomID,
+			"agent_id":   req.SenderAgentID,
+			"agent_name": agentName,
+		}
+		s.roomHub.BroadcastToRoom(roomID, "agent_replying_done", donePayload)
+		s.monitor.Broadcast("agent_replying_done", donePayload)
+	}
 	// Also push to inbox/ws human clients so they get live updates without refresh
 	s.hub.Broadcast(hub.Message{
 		Type:    "room.message",
