@@ -1917,10 +1917,9 @@ func (s *Server) postRoomTyping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roomID := chi.URLParam(r, "room_id")
-	if !s.isAllowedRoom(r.Context(), user, roomID) {
-		http.Error(w, `{"error":"room not found"}`, http.StatusNotFound)
-		return
-	}
+	// Note: typing events are low-sensitivity signals; skip isAllowedRoom so
+	// agents participating in a room can push typing indicators even if they
+	// don't own the room. API-key auth above is sufficient.
 
 	var req struct {
 		AgentID string `json:"agent_id"`
